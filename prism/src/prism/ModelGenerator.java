@@ -62,7 +62,7 @@ public interface ModelGenerator<Value> extends ModelInfo
 		return getEvaluator().createIntervalEvaluator();
 		//return (Evaluator<Interval<Value>>) (Evaluator<? extends Interval<?>>) Evaluator.createForDoubleIntervals();
 	}
-	
+
 	/**
 	 * Does the model have a single initial state?
 	 */
@@ -88,7 +88,20 @@ public interface ModelGenerator<Value> extends ModelInfo
 	 * The returned State object should be fresh, i.e. can be kept/modified. 
 	 */
 	public State getInitialState() throws PrismException;
-	
+
+	/**
+	 * Is the provided state an initial state?
+	 */
+	public default boolean isInitialState(State state) throws PrismException
+	{
+		for (State initialState : getInitialStates()) {
+			if (initialState.equals(state)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * Explore a given state of the model. After a call to this method,
 	 * the class should be able to respond to the various methods that are
@@ -108,7 +121,7 @@ public interface ModelGenerator<Value> extends ModelInfo
 		// By default, assume not known
 		return -1;
 	}
-    
+
 	/**
 	 * Get the number of nondeterministic choices in the current state.
 	 */
@@ -208,31 +221,17 @@ public interface ModelGenerator<Value> extends ModelInfo
 	public Object getTransitionAction(int i, int offset) throws PrismException;
 
 	/**
-	 * Get the action label of a transition within a choice, specified by its index/offset.
-	 * This method provides the index of the action in the list of all actions,
-	 * available from {@link #getActions()}. This information is optional - only
-	 * {@link #getTransitionAction} has to be implemented, but if {@link #getActions()}
-	 * returns non-null, then you can rely on this method to work.
-	 * Absence of an action label is denoted by -1.
+	 * Get a string representation of the action label of a transition within a choice, specified by its index/offset.
+	 * The string is "" for an unlabelled choice.
 	 * Note: For most types of models, the action label will be the same for all transitions within
 	 * the same nondeterministic choice (i.e. for each different value of {@code offset}),
 	 * but for Markov chains this may not necessarily be the case.
 	 * @param i Index of the nondeterministic choice
 	 * @param offset Index of the transition within the choice
 	 */
-	public default int getTransitionActionIndex(int i, int offset) throws PrismException
+	public default String getTransitionActionString(int i, int offset) throws PrismException
 	{
-		List<Object> actions;
-		if ((actions = getActions()) != null) {
-			int a = actions.indexOf(getTransitionAction(i, offset));
-			if (a != -1) {
-				return i;
-			} else {
-				throw new PrismException("Action name \"" + getTransitionAction(i, offset) + "\" is not in the list of actions");
-			}
-		} else {
-			throw new PrismException("Action index information not available");
-		}
+		return ActionList.actionString(getTransitionAction(i, offset));
 	}
 
 	/**
@@ -248,11 +247,10 @@ public interface ModelGenerator<Value> extends ModelInfo
 	 * @param i Index of the nondeterministic choice
 	 * @param offset Index of the transition within the choice
 	 */
-	public default String getTransitionActionString(int i, int offset) throws PrismException
+	public default String getTransitionActionDescription(int i, int offset) throws PrismException
 	{
-		// Default implementation: use toString on action object 
-		Object action = getTransitionAction(i, offset); 
-		return action == null ? "" : action.toString();
+		// Default implementation: use getTransitionActionString
+		return getTransitionActionString(i, offset);
 	}
 
 	/**
@@ -271,21 +269,16 @@ public interface ModelGenerator<Value> extends ModelInfo
 	}
 
 	/**
-	 * Get the action label of a choice, specified by its index.
-	 * This method provides the index of the action in the list of all actions,
-	 * available from {@link #getActions()}. This information is optional - only
-	 * {@link #getTransitionAction} has to be implemented, but if {@link #getActions()}
-	 * returns non-null, then you can rely on this method to work.
-	 * Absence of an action label is denoted by -1.
+	 * Get a string representation of the action label of a choice within a choice, specified by its index.
+	 * The string is "" for an unlabelled choice.
 	 * Note: If the model has different actions for different transitions within a choice
 	 * (as can be the case for Markov chains), this method returns the action for the first transition.
-	 * So, this method is essentially equivalent to {@code getTransitionAction(i, 0)}. 
+	 * So, this method is essentially equivalent to {@code getTransitionActionString(i, 0)}.
 	 * @param i Index of the nondeterministic choice
 	 */
-	public default int getChoiceActionIndex(int i) throws PrismException
+	public default String getChoiceActionString(int i) throws PrismException
 	{
-		// Default implementation 
-		return getTransitionActionIndex(i, 0);
+		return ActionList.actionString(getChoiceAction(i));
 	}
 
 	/**
@@ -297,14 +290,13 @@ public interface ModelGenerator<Value> extends ModelInfo
 	 * For unlabelled choices, this should return "", not null. 
 	 * Note: If the model has different actions for different transitions within a choice
 	 * (as can be the case for Markov chains), this method returns the action for the first transition.
-	 * So, this method is essentially equivalent to {@code getTransitionActionString(i, 0)}. 
+	 * So, this method is essentially equivalent to {@code getTransitionActionDescription(i, 0)}.
 	 * @param i Index of the nondeterministic choice
 	 */
-	public default String getChoiceActionString(int i) throws PrismException
+	public default String getChoiceActionDescription(int i) throws PrismException
 	{
-		// Default implementation: use toString on action object
-		Object action = getChoiceAction(i); 
-		return action == null ? "" : action.toString();
+		// Default implementation: use getChoiceActionString
+		return getChoiceActionString(i);
 	}
 
 	/**
@@ -349,7 +341,7 @@ public interface ModelGenerator<Value> extends ModelInfo
 	 * An index of -1 indicates that a player idles.
 	 * @param i Index of the nondeterministic choice
 	 */
-	public default int[] getTransitionIndexes(int i) 
+	public default int[] getTransitionIndexes(int i)
 	{
 		// No implementation by default
 		return null;

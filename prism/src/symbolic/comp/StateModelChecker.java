@@ -28,13 +28,17 @@ package symbolic.comp;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.Vector;
 
-import explicit.ModelExplicit;
+import io.ModelExportFormat;
+import io.ModelExportOptions;
+import io.ModelExportTask;
+import io.ModelExportZipper;
 import mtbdd.PrismMTBDD;
 import dv.DoubleVector;
 import jdd.*;
@@ -44,17 +48,8 @@ import parser.ast.*;
 import parser.ast.ExpressionFilter.FilterOperator;
 import parser.type.*;
 import parser.visitor.ReplaceLabels;
-import prism.Accuracy;
+import prism.*;
 import prism.Filter;
-import prism.ModelType;
-import prism.Prism;
-import prism.PrismComponent;
-import prism.PrismException;
-import prism.PrismLangException;
-import prism.PrismNotSupportedException;
-import prism.PrismSettings;
-import prism.PrismUtils;
-import prism.Result;
 import symbolic.model.ModelSymbolic;
 import symbolic.model.NondetModel;
 import symbolic.states.StateListMTBDD;
@@ -67,11 +62,8 @@ import symbolic.model.ProbModel;
 
 // Base class for model checkers - does state-based evaluations (no temporal/probabilistic)
 
-public class StateModelChecker extends PrismComponent implements ModelChecker
+public class StateModelChecker extends PrismNativeComponent implements ModelChecker
 {
-	// PRISM stuff
-	protected Prism prism;
-
 	// Properties file
 	protected PropertiesFile propertiesFile;
 
@@ -116,11 +108,8 @@ public class StateModelChecker extends PrismComponent implements ModelChecker
 
 	public StateModelChecker(Prism prism, Model m, PropertiesFile pf) throws PrismException
 	{
-		// Initialise PrismComponent
-		super(prism);
-
 		// Initialise
-		this.prism = prism;
+		super(prism);
 		model = m;
 		propertiesFile = pf;
 		constantValues = new Values();
@@ -144,7 +133,7 @@ public class StateModelChecker extends PrismComponent implements ModelChecker
 		// Store locally and/or pass onto engines
 		engine = prism.getEngine();
 		termCritParam = prism.getTermCritParam();
-		doIntervalIteration = prism.getSettings().getBoolean(PrismSettings.PRISM_INTERVAL_ITER);
+		doIntervalIteration = settings.getBoolean(PrismSettings.PRISM_INTERVAL_ITER);
 		verbose = prism.getVerbose();
 		storeVector = prism.getStoreVector();
 		genStrat = prism.getGenStrat();
@@ -160,11 +149,8 @@ public class StateModelChecker extends PrismComponent implements ModelChecker
 	 */
 	public StateModelChecker(Prism prism, VarList varList, JDDVars allDDRowVars, JDDVars[] varDDRowVars, Values constantValues) throws PrismException
 	{
-		// Initialise PrismComponent
-		super(prism);
-
 		// Initialise
-		this.prism = prism;
+		super(prism);
 		this.varList = varList;
 		this.allDDRowVars = allDDRowVars;
 		this.varDDRowVars = varDDRowVars;
@@ -1657,6 +1643,20 @@ public class StateModelChecker extends PrismComponent implements ModelChecker
 		return transRewards; 
 	}
 
+	/**
+	 * Check that rewards contained in an MTBDD are non-negative.
+	 * Throws an exception (with explanatory message) if negative rewards are found.
+	 * @param rewards The rewards MTBDD to check
+	 * @param rewardType A string describing the type of rewards: "State" or "Transition"
+	 */
+	public void checkNegativeRewards(JDDNode rewards, String rewardType) throws PrismException
+	{
+		double rmin = JDD.FindMin(rewards);
+		if (rmin < 0) {
+			throw new PrismException(rewardType + " rewards are negative (" + rmin + ") for some states");
+		}
+	}
+
 	@Override
 	public Values getConstantValues()
 	{
@@ -1695,12 +1695,146 @@ public class StateModelChecker extends PrismComponent implements ModelChecker
 	}
 
 	/**
+	 * Export the model.
+	 * @param exportTask Export task (destination, which parts of the model to export, options)
+	 */
+	public void exportModel(ModelExportTask exportTask) throws PrismException
+	{
+		ModelExportOptions exportOptions = exportTask.getExportOptions();
+		File file = exportTask.getFile();
+		if (exportOptions.getFormat() == ModelExportFormat.DD_DOT) {
+			JDD.ExportDDToDotFileLabelled(model.getTrans(), file.getPath(), model.getDDVarNames());
+			return;
+		}
+		if (exportOptions.getFormat() == ModelExportFormat.DRN || exportOptions.getFormat() == ModelExportFormat.UMB) {
+			throw new PrismException("Export " + exportOptions.getFormat().description() + " not yet supported by the symbolic engine");
+		}
+		if (exportOptions.getFormat() == ModelExportFormat.EXPLICIT && exportOptions.includesModelAnnotations()
+				&& !exportOptions.getPrintHeaders()) {
+			throw new PrismException("Headers cannot be disabled for combined explicit export");
+		}
+		if (exportOptions.getZipped() && file == null) {
+			throw new PrismNotSupportedException("Cannot zip export to standard output");
+		}
+
+		try {
+			model.exportToFile(file, exportOptions);
+		} catch (FileNotFoundException e) {
+			throw new PrismException("Could not open file \"" + file.getName() + "\" for output");
+		}
+
+		// Append extra sections after the main export
+		if (exportOptions.getFormat() == ModelExportFormat.DOT) {
+			// For DOT with states, append state labels and close the graph
+			try (PrismLog out = getPrismLogForFile(file, true)) {
+				model.getReachableStates().printDot(out);
+				out.println("}");
+			}
+		} else if (exportOptions.getFormat() == ModelExportFormat.EXPLICIT && exportOptions.includesModelAnnotations()) {
+			// For multi-entity EXPLICIT (.pexp), append states, labels and rewards
+			ModelExportOptions appendOptions = exportOptions.clone();
+			appendOptions.setAppendToFile(true);
+			if (exportOptions.getShowStates()) {
+				try (PrismLog sep = getPrismLogForFile(file, true)) { sep.println(); }
+				exportStates(file, appendOptions);
+			}
+			if (exportOptions.getShowLabels()) {
+				// Note: "explicit" format always includes init/deadlock
+				List<String> labelNames = new ArrayList<>();
+				labelNames.add("init");
+				labelNames.add("deadlock");
+				labelNames.addAll(prism.getModelInfo().getLabelNames());
+				// If labels from a properties file were requested, add those too
+				if (exportTask.extraLabelsUsed()) {
+					for (String name : propertiesFile.getCombinedLabelList().getLabelNames()) {
+						if (!labelNames.contains(name)) {
+							labelNames.add(name);
+						}
+					}
+				}
+				try (PrismLog sep = getPrismLogForFile(file, true)) { sep.println(); }
+				exportLabels(labelNames, file, appendOptions);
+			}
+			if (exportOptions.getShowRewards()) {
+				for (int r = 0; r < model.getNumRewardStructs(); r++) {
+					try {
+						try (PrismLog sep = getPrismLogForFile(file, true)) { sep.println(); }
+						model.exportStateRewardsToFile(r, file, appendOptions);
+						try (PrismLog sep = getPrismLogForFile(file, true)) { sep.println(); }
+						model.exportTransRewardsToFile(r, file, appendOptions);
+					} catch (FileNotFoundException e) {
+						throw new PrismException("Could not open file \"" + file.getName() + "\" for output");
+					}
+				}
+			}
+		}
+
+		// Zip the exported file, if requested
+		ModelExportZipper.zipIfRequested(exportTask);
+	}
+
+	/**
+	 * Export the transition function/matrix.
+	 * @param file File to export to (if null, print to the log instead)
+	 * @param exportOptions The options for export
+	 */
+	public void exportTransitions(File file, ModelExportOptions exportOptions) throws PrismException
+	{
+		exportModel(ModelExportTask.fromOptions(file, exportOptions));
+	}
+
+	/**
+	 * Export the state rewards for one reward structure.
+	 * @param r Index of reward structure to export (0-indexed)
+	 * @param file File to export to (if null, print to the log instead)
+	 * @param exportOptions The options for export
+	 */
+	public void exportStateRewards(int r, File file, ModelExportOptions exportOptions) throws PrismException
+	{
+		try {
+			model.exportStateRewardsToFile(r, file, exportOptions);
+		} catch (FileNotFoundException e) {
+			throw new PrismException("Could not open file \"" + file.getName() + "\" for output");
+		}
+		ModelExportZipper.zipIfRequested(file, exportOptions);
+	}
+
+	/**
+	 * Export the transition rewards for one reward structure.
+	 * @param r Index of reward structure to export (0-indexed)
+	 * @param file File to export to (if null, print to the log instead)
+	 * @param exportOptions The options for export
+	 */
+	public void exportTransRewards(int r, File file, ModelExportOptions exportOptions) throws PrismException
+	{
+		try {
+			model.exportTransRewardsToFile(r, file, exportOptions);
+		} catch (FileNotFoundException e) {
+			throw new PrismException("Could not open file \"" + file.getName() + "\" for output");
+		}
+		ModelExportZipper.zipIfRequested(file, exportOptions);
+	}
+
+	/**
+	 * Export the set of states.
+	 * @param file File to export to (if null, print to the log instead)
+	 * @param exportOptions The options for export
+	 */
+	public void exportStates(File file, ModelExportOptions exportOptions) throws PrismException
+	{
+		try (PrismLog out = getPrismLogForFile(file, exportOptions.getAppendToFile())) {
+			model.exportStates(out, exportOptions);
+		}
+		ModelExportZipper.zipIfRequested(file, exportOptions);
+	}
+
+	/**
 	 * Export a set of labels and the states that satisfy them.
 	 * @param labelNames The name of each label
-	 * @param exportType The format in which to export
-	 * @param file Where to export
+	 * @param file File to export to (if null, print to the log instead)
+	 * @param exportOptions The options for export
 	 */
-	public void exportLabels(List<String> labelNames, int exportType, File file) throws PrismException, FileNotFoundException
+	public void exportLabels(List<String> labelNames, File file, ModelExportOptions exportOptions) throws PrismException
 	{
 		// Convert labels to BDDs
 		int numLabels = labelNames.size();
@@ -1712,12 +1846,41 @@ public class StateModelChecker extends PrismComponent implements ModelChecker
 		// Export them using the MTBDD engine
 		String matlabVarName = "l";
 		String labelNamesArr[] = labelNames.toArray(new String[labelNames.size()]);
-		PrismMTBDD.ExportLabels(labels, labelNamesArr, matlabVarName, allDDRowVars, odd, exportType, (file != null) ? file.getPath() : null);
-		
+		try {
+			PrismMTBDD.ExportLabels(labels, labelNamesArr, matlabVarName, allDDRowVars, odd, Prism.convertExportType(exportOptions), (file != null) ? file.getPath() : null, exportOptions.getAppendToFile(), exportOptions.getPrintHeaders() ? "# Labels\n" : null);
+		} catch (FileNotFoundException e) {
+			throw new PrismException("Could not open file \"" + file.getName() + "\" for output");
+		}
+
 		// Derefs
 		for (int i = 0; i < numLabels; i++) {
 			JDD.Deref(labels[i]);
 		}
+
+		ModelExportZipper.zipIfRequested(file, exportOptions);
+	}
+
+	/**
+	 * Export the transition matrix to a Spy file.
+	 * @param file File to export to
+	 */
+	public void exportTransitionsToSpyFile(File file) throws PrismException
+	{
+		// choose depth
+		int depth = model.getAllDDRowVars().n();
+		if (depth > 9)
+			depth = 9;
+
+		// get rid of non det vars if necessary
+		JDDNode tmp = model.getTrans();
+		JDD.Ref(tmp);
+		if (model.getModelType() == ModelType.MDP) {
+			tmp = JDD.MaxAbstract(tmp, ((NondetModel) model).getAllDDNondetVars());
+		}
+
+		// export to spy file
+		JDD.ExportMatrixToSpyFile(tmp, model.getAllDDRowVars(), model.getAllDDColVars(), depth, file.getPath());
+		JDD.Deref(tmp);
 	}
 }
 

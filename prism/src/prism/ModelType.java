@@ -86,13 +86,13 @@ public enum ModelType
 		{
 			return true;
 		}
-		
+
 		@Override
 		public boolean concurrent()
 		{
 			return true;
 		}
-		
+
 		@Override
 		public ModelType removeNondeterminism()
 		{
@@ -243,7 +243,27 @@ public enum ModelType
 			// NB: we distinguish between nondeterminism and uncertainty
 			return false;
 		}
-		
+
+		@Override
+		public boolean uncertain()
+		{
+			return true;
+		}
+
+		@Override
+		public boolean intervals()
+		{
+			return true;
+		}
+	},
+	UDTMC("uncertain discrete-time Markov chain") {
+		@Override
+		public boolean nondeterministic()
+		{
+			// NB: we distinguish between nondeterminism and uncertainty
+			return false;
+		}
+
 		@Override
 		public boolean uncertain()
 		{
@@ -251,6 +271,69 @@ public enum ModelType
 		}
 	},
 	IMDP("interval Markov decision process") {
+		@Override
+		public ModelType removeNondeterminism()
+		{
+			return DTMC;
+		}
+
+		@Override
+		public boolean uncertain()
+		{
+			return true;
+		}
+
+		@Override
+		public boolean intervals()
+		{
+			return true;
+		}
+	},
+	UMDP("uncertain Markov decision process") {
+		@Override
+		public ModelType removeNondeterminism()
+		{
+			return DTMC;
+		}
+
+		@Override
+		public boolean uncertain()
+		{
+			return true;
+		}
+	},
+	IPOMDP("interval partially observable Markov decision process") {
+		@Override
+		public boolean partiallyObservable()
+		{
+			return true;
+		}
+
+		@Override
+		public ModelType removeNondeterminism()
+		{
+			return DTMC;
+		}
+
+		@Override
+		public boolean uncertain()
+		{
+			return true;
+		}
+
+		@Override
+		public boolean intervals()
+		{
+			return true;
+		}
+	},
+	UPOMDP("uncertain partially observable Markov decision process") {
+		@Override
+		public boolean partiallyObservable()
+		{
+			return true;
+		}
+
 		@Override
 		public ModelType removeNondeterminism()
 		{
@@ -370,6 +453,14 @@ public enum ModelType
 	 * Does this model have uncertainty (e.g., intervals)?
 	 */
 	public boolean uncertain()
+	{
+		return false;
+	}
+
+	/**
+	 * Does this model define probabilities using intervals?
+	 */
+	public boolean intervals()
 	{
 		return false;
 	}

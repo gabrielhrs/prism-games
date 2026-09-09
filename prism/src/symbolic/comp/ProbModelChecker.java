@@ -43,6 +43,7 @@ import common.StopWatch;
 import dv.DoubleVector;
 import explicit.ExportIterations;
 import hybrid.PrismHybrid;
+import io.ModelExportOptions;
 import jdd.JDD;
 import jdd.JDDNode;
 import jdd.JDDVars;
@@ -253,7 +254,9 @@ public class ProbModelChecker extends NonProbModelChecker
 		// Get rewards
 		Object rs = expr.getRewardStructIndex();
 		JDDNode stateRewards = getStateRewardsByIndexObject(rs, model, constantValues);
+		checkNegativeRewards(stateRewards, "State");
 		JDDNode transRewards = getTransitionRewardsByIndexObject(rs, model, constantValues);
+		checkNegativeRewards(transRewards, "Transition");
 
 		// Print a warning if Rmin/Rmax used
 		if (opInfo.getRelOp() == RelOp.MIN || opInfo.getRelOp() == RelOp.MAX) {
@@ -350,10 +353,13 @@ public class ProbModelChecker extends NonProbModelChecker
 			// Compute bottom strongly connected components (BSCCs)
 			if (bsccComp) {
 				SCCComputer sccComputer = prism.getSCCComputer(model);
+				StopWatch sccTimer = new StopWatch(mainLog);
+				sccTimer.start("BSCC computation");
 				sccComputer.computeBSCCs();
 				bsccs = sccComputer.getBSCCs();
 				notInBSCCs = sccComputer.getNotInBSCCs();
 				numBSCCs = bsccs.size();
+				sccTimer.stop("found " + numBSCCs + " BSCCs");
 			}
 			// Unless we've been told to skip it
 			else {
@@ -500,8 +506,7 @@ public class ProbModelChecker extends NonProbModelChecker
 		// and whether we want to use the corresponding algorithms
 		boolean useSimplePathAlgo = expr.isSimplePathFormula();
 
-		if (useSimplePathAlgo &&
-		    prism.getSettings().getBoolean(PrismSettings.PRISM_PATH_VIA_AUTOMATA) &&
+		if (useSimplePathAlgo && settings.getBoolean(PrismSettings.PRISM_PATH_VIA_AUTOMATA) &&
 		    LTLModelChecker.isSupportedLTLFormula(model.getModelType(), expr)) {
 			// If PRISM_PATH_VIA_AUTOMATA is true, we want to use the LTL engine
 			// whenever possible
@@ -614,9 +619,10 @@ public class ProbModelChecker extends NonProbModelChecker
 		// Output product, if required
 		if (prism.getExportProductTrans()) {
 			try {
-				int precision = getSettings().getInteger(PrismSettings.PRISM_EXPORT_MODEL_PRECISION);
+				ModelExportOptions exportOptions = new ModelExportOptions();
+				exportOptions.setModelPrecision(getSettings().getInteger(PrismSettings.PRISM_EXPORT_MODEL_PRECISION));
 				mainLog.println("\nExporting product transition matrix to file \"" + prism.getExportProductTransFilename() + "\"...");
-				modelProduct.exportToFile(Prism.EXPORT_PLAIN, true, new File(prism.getExportProductTransFilename()), precision);
+				modelProduct.exportToFile(new File(prism.getExportProductTransFilename()), exportOptions);
 			} catch (FileNotFoundException e) {
 				mainLog.printWarning("Could not export product transition matrix to file \"" + prism.getExportProductTransFilename() + "\"");
 			}
@@ -624,7 +630,7 @@ public class ProbModelChecker extends NonProbModelChecker
 		if (prism.getExportProductStates()) {
 			mainLog.println("\nExporting product state space to file \"" + prism.getExportProductStatesFilename() + "\"...");
 			PrismFileLog out = new PrismFileLog(prism.getExportProductStatesFilename());
-			modelProduct.exportStates(Prism.EXPORT_PLAIN, out);
+			modelProduct.exportStates(out, new ModelExportOptions());
 			out.close();
 		}
 
@@ -1028,10 +1034,10 @@ public class ProbModelChecker extends NonProbModelChecker
 		DA<BitSet, AcceptanceReach> da = mcLtl.constructDFAForCosafetyRewardLTL(this, model, expr, labelDDs);
 
 		// If required, export DA 
-		if (prism.getSettings().getExportPropAut()) {
-			mainLog.println("Exporting DA to file \"" + prism.getSettings().getExportPropAutFilename() + "\"...");
-			PrintStream out = PrismUtils.newPrintStream(prism.getSettings().getExportPropAutFilename());
-			da.print(out, prism.getSettings().getExportPropAutType());
+		if (settings.getExportPropAut()) {
+			mainLog.println("Exporting DA to file \"" + settings.getExportPropAutFilename() + "\"...");
+			PrintStream out = PrismUtils.newPrintStream(settings.getExportPropAutFilename());
+			da.print(out, settings.getExportPropAutType());
 			out.close();
 			//da.printDot(new java.io.PrintStream("da.dot"));
 		}
@@ -1041,9 +1047,10 @@ public class ProbModelChecker extends NonProbModelChecker
 		// Output product, if required
 		if (prism.getExportProductTrans()) {
 			try {
-				int precision = getSettings().getInteger(PrismSettings.PRISM_EXPORT_MODEL_PRECISION);
+				ModelExportOptions exportOptions = new ModelExportOptions();
+				exportOptions.setModelPrecision(getSettings().getInteger(PrismSettings.PRISM_EXPORT_MODEL_PRECISION));
 				mainLog.println("\nExporting product transition matrix to file \"" + prism.getExportProductTransFilename() + "\"...");
-				modelProduct.getProductModel().exportToFile(Prism.EXPORT_PLAIN, true, new File(prism.getExportProductTransFilename()), precision);
+				modelProduct.getProductModel().exportToFile(new File(prism.getExportProductTransFilename()), exportOptions);
 			} catch (FileNotFoundException e) {
 				mainLog.printWarning("Could not export product transition matrix to file \"" + prism.getExportProductTransFilename() + "\"");
 			}
@@ -1051,7 +1058,7 @@ public class ProbModelChecker extends NonProbModelChecker
 		if (prism.getExportProductStates()) {
 			mainLog.println("\nExporting product state space to file \"" + prism.getExportProductStatesFilename() + "\"...");
 			PrismFileLog out = new PrismFileLog(prism.getExportProductStatesFilename());
-			modelProduct.getProductModel().exportStates(Prism.EXPORT_PLAIN, out);
+			modelProduct.getProductModel().exportStates(out, new ModelExportOptions());
 			out.close();
 		}
 
@@ -1114,10 +1121,13 @@ public class ProbModelChecker extends NonProbModelChecker
 		// compute bottom strongly connected components (bsccs)
 		if (bsccComp) {
 			SCCComputer sccComputer = prism.getSCCComputer(model);
+			StopWatch sccTimer = new StopWatch(mainLog);
+			sccTimer.start("BSCC computation");
 			sccComputer.computeBSCCs();
 			vectBSCCs = sccComputer.getBSCCs();
 			notInBSCCs = sccComputer.getNotInBSCCs();
 			numBSCCs = vectBSCCs.size();
+			sccTimer.stop("found " + numBSCCs + " BSCCs");
 		}
 		// unless we've been told to skip it
 		else {
@@ -1605,7 +1615,7 @@ public class ProbModelChecker extends NonProbModelChecker
 			String labelNames[] = { "init", "target" };
 			try {
 				mainLog.println("\nExporting target states info to file \"" + prism.getExportTargetFilename() + "\"...");
-				PrismMTBDD.ExportLabels(labels, labelNames, "l", model.getAllDDRowVars(), model.getODD(), Prism.EXPORT_PLAIN, prism.getExportTargetFilename());
+				PrismMTBDD.ExportLabels(labels, labelNames, "l", model.getAllDDRowVars(), model.getODD(), Prism.EXPORT_PLAIN, prism.getExportTargetFilename(), false, new ModelExportOptions().getPrintHeaders() ? "# Labels\n" : null);
 			} catch (FileNotFoundException e) {
 				mainLog.printWarning("Could not export target to file \"" + prism.getExportTargetFilename() + "\"");
 			}
@@ -1784,10 +1794,13 @@ public class ProbModelChecker extends NonProbModelChecker
 
 		// Compute bottom strongly connected components (BSCCs)
 		SCCComputer sccComputer = prism.getSCCComputer(model);
+		StopWatch sccTimer = new StopWatch(mainLog);
+		sccTimer.start("BSCC computation");
 		sccComputer.computeBSCCs();
 		bsccs = sccComputer.getBSCCs();
 		notInBSCCs = sccComputer.getNotInBSCCs();
 		numBSCCs = bsccs.size();
+		sccTimer.stop("found " + numBSCCs + " BSCCs");
 
 		// Find BSCCs with non-zero reward
 		JDD.Ref(sr);
@@ -2468,10 +2481,13 @@ public class ProbModelChecker extends NonProbModelChecker
 			// Compute bottom strongly connected components (BSCCs)
 			if (bsccComp) {
 				SCCComputer sccComputer = prism.getSCCComputer(model);
+				StopWatch sccTimer = new StopWatch(mainLog);
+				sccTimer.start("BSCC computation");
 				sccComputer.computeBSCCs();
 				bsccs = sccComputer.getBSCCs();
 				notInBSCCs = sccComputer.getNotInBSCCs();
 				numBSCCs = bsccs.size();
+				sccTimer.stop("found " + numBSCCs + " BSCCs");
 			}
 			// Unless we've been told to skip it
 			else {

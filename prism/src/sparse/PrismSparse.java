@@ -54,7 +54,7 @@ public class PrismSparse
 	static
 	{
 		try {
-			System.loadLibrary("prismsparse");
+			System.loadLibrary("prism");
 		}
 		catch (UnsatisfiedLinkError e) {
 			System.out.println(e);
@@ -65,22 +65,6 @@ public class PrismSparse
 	//----------------------------------------------------------------------------------------------
 	// initialise/close down methods
 	//----------------------------------------------------------------------------------------------
-
-	public static void initialise(PrismLog mainLog, PrismLog techLog)
-	{
-		setCUDDManager();
-		setMainLog(mainLog);
-		setTechLog(techLog);
-	}
-	
-	public static void closeDown()
-	{
-		// tidy up any JNI stuff
-		PS_FreeGlobalRefs();
-	}
-	
-	// tidy up in jni (free global references)
-	private static native void PS_FreeGlobalRefs();
 
 	/**
 	 * Check that number of reachable states is in a range that can be handled by
@@ -94,63 +78,13 @@ public class PrismSparse
 		ODDUtils.checkInt(odd, "Currently, the sparse engine cannot handle models");
 	}
 
-	//----------------------------------------------------------------------------------------------
-	// cudd manager
-	//----------------------------------------------------------------------------------------------
-
-	// cudd manager
-	
-	// jni method to set cudd manager for native code
-	private static native void PS_SetCUDDManager(long ddm);
-	public static void setCUDDManager()
-	{
-		PS_SetCUDDManager(JDD.GetCUDDManager());
-	}
-	
-	//----------------------------------------------------------------------------------------------
-	// logs
-	//----------------------------------------------------------------------------------------------
-
-	// main log
-	
-	// place to store main log for java code
-	private static PrismLog mainLog;
-	// jni method to set main log for native code
-	private static native void PS_SetMainLog(PrismLog log);
-	// method to set main log both in java and c++
-	public static void setMainLog(PrismLog log)
-	{
-		mainLog = log;
-		PS_SetMainLog(log);
-	}
-	
-	// tech log
-	
-	// place to store tech log for java code
-	private static PrismLog techLog;
-	// jni method to set tech log for native code
-	private static native void PS_SetTechLog(PrismLog log);
-	// method to set tech log both in java and c++
-	public static void setTechLog(PrismLog log)
-	{
-		techLog = log;
-		PS_SetTechLog(log);
-	}
-
-	private static native void PS_SetExportIterations(boolean value);
-	public static void SetExportIterations(boolean value)
-	{
-		PS_SetExportIterations(value);
-	}
-
 	//------------------------------------------------------------------------------
 	// error message
 	//------------------------------------------------------------------------------
 	
-	private static native String PS_GetErrorMessage();
 	public static String getErrorMessage()
 	{
-		return PS_GetErrorMessage();
+		return PrismNative.PN_GetErrorMessage();
 	}
 
 	/**
@@ -588,12 +522,12 @@ public class PrismSparse
 	//------------------------------------------------------------------------------
 
 	// export matrix
-	private static native int PS_ExportMatrix(long matrix, String name, long rv, int nrv, long cv, int ncv, long odd, int exportType, String filename, String rewardStructName, boolean noexportheaders);
-	public static void ExportMatrix(JDDNode matrix, String name, JDDVars rows, JDDVars cols, ODDNode odd, int exportType, String filename, int precision, String rewardStructName, boolean noexportheaders) throws FileNotFoundException, PrismException
+	private static native int PS_ExportMatrix(long matrix, String name, long rv, int nrv, long cv, int ncv, long odd, int exportType, String filename, boolean append, String headerText);
+	public static void ExportMatrix(JDDNode matrix, String name, JDDVars rows, JDDVars cols, ODDNode odd, int exportType, String filename, boolean append, int precision, String headerText) throws FileNotFoundException, PrismException
 	{
 		PrismNative.setExportModelPrecision(precision);
 		checkNumStates(odd);
-		int res = PS_ExportMatrix(matrix.ptr(), name, rows.array(), rows.n(), cols.array(), cols.n(), odd.ptr(), exportType, filename, rewardStructName, noexportheaders);
+		int res = PS_ExportMatrix(matrix.ptr(), name, rows.array(), rows.n(), cols.array(), cols.n(), odd.ptr(), exportType, filename, append, headerText);
 		if (res == -1) {
 			throw new FileNotFoundException();
 		}
@@ -601,14 +535,29 @@ public class PrismSparse
 			throw new PrismException("Out of memory building matrix for export");
 		}
 	}
-	
+
+	// export markov chain (with actions)
+	private static native int PS_ExportMC(long[] trans_per_action, List<String> synchs, String name, long rv, int nrv, long cv, int ncv, long odd, int exportType, String filename, boolean append, String headerText);
+	public static void ExportMC(JDDNode[] transPerAction, List<String> synchs, String name, JDDVars rows, JDDVars cols, ODDNode odd, int exportType, String filename, boolean append, int precision, String headerText) throws FileNotFoundException, PrismException
+	{
+		PrismNative.setExportModelPrecision(precision);
+		checkNumStates(odd);
+		int res = PS_ExportMC(JDDNode.ptrs(transPerAction), synchs, name, rows.array(), rows.n(), cols.array(), cols.n(), odd.ptr(), exportType, filename, append, headerText);
+		if (res == -1) {
+			throw new FileNotFoundException();
+		}
+		else if (res == -2) {
+			throw new PrismException("Out of memory building matrix for export");
+		}
+	}
+
 	// export mdp
-	private static native int PS_ExportMDP(long mdp, long trans_actions, List<String> synchs, String name, long rv, int nrv, long cv, int ncv, long ndv, int nndv, long odd, int exportType, String filename);
-	public static void ExportMDP(JDDNode mdp, JDDNode transActions, List<String> synchs, String name, JDDVars rows, JDDVars cols, JDDVars nondet, ODDNode odd, int exportType, String filename, int precision) throws FileNotFoundException, PrismException
+	private static native int PS_ExportMDP(long mdp, long trans_actions, List<String> synchs, String name, long rv, int nrv, long cv, int ncv, long ndv, int nndv, long odd, int exportType, String filename, boolean append, String headerText);
+	public static void ExportMDP(JDDNode mdp, JDDNode transActions, List<String> synchs, String name, JDDVars rows, JDDVars cols, JDDVars nondet, ODDNode odd, int exportType, String filename, boolean append, int precision, String headerText) throws FileNotFoundException, PrismException
 	{
 		PrismNative.setExportModelPrecision(precision);
 		checkNumStates(odd);
-		int res = PS_ExportMDP(mdp.ptr(), (transActions == null) ? 0 : transActions.ptr(), synchs, name, rows.array(), rows.n(), cols.array(), cols.n(), nondet.array(), nondet.n(), odd.ptr(), exportType, filename);
+		int res = PS_ExportMDP(mdp.ptr(), (transActions == null) ? 0 : transActions.ptr(), synchs, name, rows.array(), rows.n(), cols.array(), cols.n(), nondet.array(), nondet.n(), odd.ptr(), exportType, filename, append, headerText);
 		if (res == -1) {
 			throw new FileNotFoundException();
 		}
@@ -616,14 +565,14 @@ public class PrismSparse
 			throw new PrismException("Out of memory building matrix for export");
 		}
 	}
-	
+
 	// export sub-mdp, i.e. mdp transition rewards
-	private static native int PS_ExportSubMDP(long mdp, long submdp, String name, long rv, int nrv, long cv, int ncv, long ndv, int nndv, long odd, int exportType, String filename, String rewardStructName, boolean noexportheaders);
-	public static void ExportSubMDP(JDDNode mdp, JDDNode submdp, String name, JDDVars rows, JDDVars cols, JDDVars nondet, ODDNode odd, int exportType, String filename, int precision, String rewardStructName, boolean noexportheaders) throws FileNotFoundException, PrismException
+	private static native int PS_ExportSubMDP(long mdp, long submdp, String name, long rv, int nrv, long cv, int ncv, long ndv, int nndv, long odd, int exportType, String filename, boolean append, String headerText);
+	public static void ExportSubMDP(JDDNode mdp, JDDNode submdp, String name, JDDVars rows, JDDVars cols, JDDVars nondet, ODDNode odd, int exportType, String filename, boolean append, int precision, String headerText) throws FileNotFoundException, PrismException
 	{
 		PrismNative.setExportModelPrecision(precision);
 		checkNumStates(odd);
-		int res = PS_ExportSubMDP(mdp.ptr(), submdp.ptr(), name, rows.array(), rows.n(), cols.array(), cols.n(), nondet.array(), nondet.n(), odd.ptr(), exportType, filename, rewardStructName, noexportheaders);
+		int res = PS_ExportSubMDP(mdp.ptr(), submdp.ptr(), name, rows.array(), rows.n(), cols.array(), cols.n(), nondet.array(), nondet.n(), odd.ptr(), exportType, filename, append, headerText);
 		if (res == -1) {
 			throw new FileNotFoundException();
 		}

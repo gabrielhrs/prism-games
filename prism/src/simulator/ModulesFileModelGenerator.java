@@ -135,6 +135,20 @@ public class ModulesFileModelGenerator<Value> implements ModelGenerator<Value>, 
 
 	/**
 	 * Build a ModulesFileModelGenerator for a particular PRISM model, represented by a {@link ModulesFile} instance.
+	 * This method assumes that {@link BigRational}s are used to represent probabilities exactly.
+	 * Use this method to guarantee getting a {@code ModulesFileModelGenerator<BigRational>}.
+	 * Throw an explanatory exception if the model generator cannot be created.
+	 * @param modulesFile The PRISM model
+	 * @param parent Parent, used e.g. for settings (can be null)
+	 */
+	public static ModulesFileModelGenerator<BigRational> createForRationals(ModulesFile modulesFile, PrismComponent parent) throws PrismException
+	{
+		Evaluator<BigRational> eval = Evaluator.forBigRational();
+		return new ModulesFileModelGenerator<>(modulesFile, eval, parent);
+	}
+
+	/**
+	 * Build a ModulesFileModelGenerator for a particular PRISM model, represented by a {@link ModulesFile} instance.
 	 * This method assumes that Functions are used to represent probabilities parametrically.
 	 * Use this method to guarantee getting a {@code ModulesFileModelGenerator<Function>}.
 	 * Throw an explanatory exception if the model generator cannot be created.
@@ -391,7 +405,7 @@ public class ModulesFileModelGenerator<Value> implements ModelGenerator<Value>, 
 	{
 		return modulesFile.isVarObservable(i);
 	}
-	
+
 	@Override
 	public List<Object> getActions()
 	{
@@ -492,6 +506,20 @@ public class ModulesFileModelGenerator<Value> implements ModelGenerator<Value>, 
 			}
 		}
 		return initStates;
+	}
+
+	@Override
+	public boolean isInitialState(State state) throws PrismException
+	{
+		// One initial state
+		if (modulesFile.getInitialStates() == null) {
+			return modulesFile.getDefaultInitialState().equals(state);
+		}
+		// Possibly multiple initial states
+		else {
+			Expression init = modulesFile.getInitialStates();
+			return init.evaluateBoolean(ec.setState(state));
+		}
 	}
 
 	@Override
@@ -596,22 +624,10 @@ public class ModulesFileModelGenerator<Value> implements ModelGenerator<Value>, 
 		int index = transitions.getTotalIndexOfTransition(i, offset);
 		if (!modelType.concurrent()) {
 			int a = transitions.getTransitionModuleOrActionIndex(index);
-			return a < 0 ? null : getActions().get(a - 1);
+			return a < 0 ? null : modulesFile.getSynch(a - 1);
 		} else {
-			int as[] = ((ChoiceListFlexi<Value>) transitions.getChoice(index)).getActions();
+			int as[] = ((ChoiceListFlexi<Value>) transitions.getChoice(i)).getActions();
 			return as;
-		}
-	}
-
-	@Override
-	public int getTransitionActionIndex(int i, int offset) throws PrismException
-	{
-		TransitionList<?> transitions = getTransitionList();
-		if (!modelType.concurrent()) {
-			int a = transitions.getTransitionModuleOrActionIndex(transitions.getTotalIndexOfTransition(i, offset));
-			return a < 0 ? -1 : a - 1;
-		} else {
-			throw new PrismException("Action index info not available");
 		}
 	}
 
@@ -635,22 +651,10 @@ public class ModulesFileModelGenerator<Value> implements ModelGenerator<Value>, 
 		TransitionList<?> transitions = getTransitionList();
 		if (!modelType.concurrent()) {
 			int a = transitions.getChoiceModuleOrActionIndex(index);
-			return a < 0 ? null : getActions().get(a - 1);
+			return a < 0 ? null : modulesFile.getSynch(a - 1);
 		} else {
 			int as[] = ((ChoiceListFlexi<Value>) transitions.getChoice(index)).getActions();
 			return as;
-		}
-	}
-
-	@Override
-	public int getChoiceActionIndex(int index) throws PrismException
-	{
-		TransitionList<?> transitions = getTransitionList();
-		if (!modelType.concurrent()) {
-			int a = transitions.getChoiceModuleOrActionIndex(index);
-			return a < 0 ? -1 : a - 1;
-		} else {
-			throw new PrismException("Action index info not available");
 		}
 	}
 
@@ -702,11 +706,11 @@ public class ModulesFileModelGenerator<Value> implements ModelGenerator<Value>, 
 		String s = "[";
 		int n = as.length;
 		if (n > 0) {
-			s += as[0] == -1 ? "-" : getActions().get(as[0] - 1);
+			s += as[0] == -1 ? "-" : modulesFile.getSynchs().get(as[0] - 1);
 		}
 		for (int i = 1; i < n; i++) {
 			s += ",";
-			s += as[i] == -1 ? "-" : getActions().get(as[i] - 1);
+			s += as[i] == -1 ? "-" : modulesFile.getSynchs().get(as[i] - 1);
 		}
 		s += "]";
 		return s;
@@ -859,7 +863,7 @@ public class ModulesFileModelGenerator<Value> implements ModelGenerator<Value>, 
 	}
 	
 	@Override
-	public Value getStateReward(int r, State state) throws PrismException
+	public Value getStateReward(int r, State state, boolean allowNegative) throws PrismException
 	{
 		RewardStruct rewStr = modulesFile.getRewardStruct(r);
 		int n = rewStr.getNumItems();
@@ -878,12 +882,12 @@ public class ModulesFileModelGenerator<Value> implements ModelGenerator<Value>, 
 						if (!eval.isFinite(rew)) {
 							throw new PrismLangException("Reward structure is not finite at state " + state, rewStr.getReward(i));
 						}
-						// For now, disable negative reward check for CSGs
-						if (modelType != ModelType.CSG) {
-							if (!eval.geq(rew, eval.zero())) {
-								throw new PrismLangException("Reward structure is negative + (" + rew + ") at state " + state, originalModulesFile.getRewardStruct(r).getReward(i));
-							}
-						}
+                        // For now, disable negative reward check for CSGs
+                        if (modelType != ModelType.CSG) {
+                            if (!allowNegative && !eval.geq(rew, eval.zero())) {
+                                throw new PrismLangException("Reward structure is negative (" + rew + ") at state " + state, originalModulesFile.getRewardStruct(r).getReward(i));
+                            }
+                        }
 					}
 					d = eval.add(d, rew);
 				}
@@ -893,7 +897,7 @@ public class ModulesFileModelGenerator<Value> implements ModelGenerator<Value>, 
 	}
 
 	@Override
-	public Value getStateActionReward(int r, State state, Object action) throws PrismException
+	public Value getStateActionReward(int r, State state, Object action, boolean allowNegative) throws PrismException
 	{
 		RewardStruct rewStr = modulesFile.getRewardStruct(r);
 		int n = rewStr.getNumItems();
@@ -915,7 +919,7 @@ public class ModulesFileModelGenerator<Value> implements ModelGenerator<Value>, 
 								if (!eval.isFinite(rew)) {
 									throw new PrismLangException("Reward structure is not finite at state " + state, rewStr.getReward(i));
 								}
-								if (!eval.geq(rew, eval.zero())) {
+								if (!allowNegative && !eval.geq(rew, eval.zero())) {
 									throw new PrismLangException("Reward structure is negative + (" + rew + ") at state " + state, originalModulesFile.getRewardStruct(r).getReward(i));
 								}
 							}

@@ -38,14 +38,7 @@ import jdd.JDDVars;
 import parser.Values;
 import parser.VarList;
 import parser.ast.DeclarationType;
-import prism.ModelInfo;
-import prism.ModelType;
-import prism.Prism;
-import prism.PrismException;
-import prism.PrismLog;
-import prism.PrismNotSupportedException;
-import prism.ProgressDisplay;
-import prism.RewardGenerator;
+import prism.*;
 import symbolic.model.Model;
 import symbolic.model.ModelSymbolic;
 import symbolic.model.ModelVariablesDD;
@@ -56,12 +49,8 @@ import symbolic.model.StochModel;
 /**
  * Class to convert explicit-state file storage of a model to symbolic representation.
  */
-public class ExplicitFiles2MTBDD
+public class ExplicitFiles2MTBDD extends PrismNativeComponent
 {
-	// Prism stuff
-	private Prism prism;
-	private PrismLog mainLog;
-
 	// Importer / files to read in from
 	private ExplicitModelImporter importer;
 
@@ -76,9 +65,11 @@ public class ExplicitFiles2MTBDD
 	private int statesArray[][] = null;
 
 	// Reward info
-	private RewardGenerator rewardInfo;
+	private RewardInfo rewardInfo;
 
 	// mtbdd stuff
+
+	private ModelSymbolic model = null;
 
 	// dds/dd vars - whole system
 	private JDDNode trans; // transition matrix dd
@@ -102,15 +93,15 @@ public class ExplicitFiles2MTBDD
 
 	private int maxNumChoices = 0;
 	private LinkedHashMap<String, JDDNode> labelsDD;
+	private JDDNode labelDeadlock;
 
 	// Progress info
 	private ProgressDisplay progress;
 	private int transitionsImported;
 
-	public ExplicitFiles2MTBDD(Prism prism)
+	public ExplicitFiles2MTBDD(Prism prism) throws PrismException
 	{
-		this.prism = prism;
-		mainLog = prism.getMainLog();
+		super(prism);
 	}
 
 	/**
@@ -121,14 +112,34 @@ public class ExplicitFiles2MTBDD
 	public Model build(ExplicitModelImporter importer) throws PrismException
 	{
 		this.importer = importer;
-		this.modelInfo = importer.getModelInfo();
+		modelInfo = importer.getModelInfo();
 		modelType = modelInfo.getModelType();
 		varList = modelInfo.createVarList();
 		numVars = varList.getNumVars();
-		this.numStates = importer.getNumStates();
+		numStates = importer.getNumStates();
 		modelVariables = new ModelVariablesDD();
-
 		rewardInfo = importer.getRewardInfo();
+
+		// Check model is defined as doubles
+		if (importer.modelIsExact()) {
+			throw new PrismException("Cannot import an exact model unless in exact mode");
+		}
+
+		// Check model type is supported
+		switch (modelType) {
+			case DTMC:
+			case CTMC:
+			case MDP:
+				break;
+			default:
+				throw new PrismNotSupportedException("Symbolic engine does not support import of " + modelType + "s");
+		}
+
+		// Tell importer we need state-indexed transition rewards
+		importer.setTransitionRewardIndexing(ExplicitModelImporter.TransitionRewardIndexing.STATE);
+
+		// Tell importer not to fix deadlocks; we do it here
+		importer.setFixDeadlocks(false);
 
 		// Build states list, if info is available
 		// (importer can handle case where it is unavailable, but we bypass this)
@@ -152,7 +163,6 @@ public class ExplicitFiles2MTBDD
 	/** build model */
 	private Model buildModel() throws PrismException
 	{
-		ModelSymbolic model = null;
 		JDDNode tmp, tmp2;
 		JDDVars ddv;
 		int i;
@@ -201,12 +211,6 @@ public class ExplicitFiles2MTBDD
 		// construct labels and init state info
 		buildLabelsAndInitialStates();
 
-		// compute rewards
-		buildStateRewards();
-		buildTransitionRewards();
-
-		Values constantValues = new Values(); // no constants
-
 		// create new Model object to be returned
 		// they need a module name list, so we fake that
 		int numModules = 1;
@@ -223,8 +227,13 @@ public class ExplicitFiles2MTBDD
 			model = new StochModel(trans, start, allDDRowVars, allDDColVars, modelVariables,
 					varList, varDDRowVars, varDDColVars);
 		}
+		model.setConstantValues(modelInfo.getConstantValues());
+
+		// compute/set rewards
+		buildStateRewards();
+		buildTransitionRewards();
 		model.setRewards(stateRewards, transRewards, rewardStructNames);
-		model.setConstantValues(constantValues);
+
 		// set action info
 		// TODO: disable if not required?
 		model.setSynchs(synchs);
@@ -255,6 +264,7 @@ public class ExplicitFiles2MTBDD
 
 		// attach labels
 		attachLabels(model);
+		model.addDeadlocks(labelDeadlock);
 
 		// deref spare dds
 		if (labelsDD != null) {
@@ -276,6 +286,8 @@ public class ExplicitFiles2MTBDD
 
 		modelVariables = new ModelVariablesDD();
 
+		modelVariables.preallocateExtraActionVariables(settings.getInteger(PrismSettings.PRISM_DD_EXTRA_ACTION_VARS));
+		
 		// create arrays/etc. first
 
 		// module variable (row/col) vars
@@ -441,6 +453,7 @@ public class ExplicitFiles2MTBDD
 	{
 		// Initialise BDDs
 		start = JDD.Constant(0);
+		labelDeadlock = JDD.Constant(0);
 		int numLabels = modelInfo.getNumLabels();
 		JDDNode[] labelDDs = new JDDNode[numLabels];
 		for (int l = 0; l < numLabels; l++) {
@@ -451,9 +464,11 @@ public class ExplicitFiles2MTBDD
 			labelDDs[l] = JDD.Or(labelDDs[l], encodeState(s));
 		}, s -> {
 			start = JDD.Or(start, encodeState(s));
+		}, s -> {
+			labelDeadlock = JDD.Or(labelDeadlock, encodeState(s));
 		});
 		if (start == null || start.equals(JDD.ZERO)) {
-			throw new PrismException("No initial states found in labels file");
+			throw new PrismException("No initial states found");
 		}
 		// Store label map
 		labelsDD = new LinkedHashMap<>();
@@ -498,9 +513,9 @@ public class ExplicitFiles2MTBDD
 			transRewards[r] = JDD.Constant(0);
 			int finalR = r;
 			if (!modelType.nondeterministic()) {
-				importer.extractMCTransitionRewards(r, (s, s2, d) -> storeMCTransitionReward(finalR, s, s2, d));
+				importer.extractMCTransitionRewards(r, (s, s2, d) -> storeMCTransitionReward(finalR, s, s2, d), Evaluator.forDouble());
 			} else {
-				importer.extractMDPTransitionRewards(r, (s, i, s2, d) -> storeMDPTransitionReward(finalR, s, i, s2, d));
+				importer.extractMDPTransitionRewards(r, (s, i, d) -> storeMDPTransitionReward(finalR, s, i, d));
 			}
 		}
 	}
@@ -542,6 +557,24 @@ public class ExplicitFiles2MTBDD
 	 * @param rewardStructIndex reward structure index
 	 * @param s source state index
 	 * @param i choice index
+	 * @param d reward value
+	 */
+	protected void storeMDPTransitionReward(int rewardStructIndex, int s, int i, double d)
+	{
+		// Construct element of matrix MTBDD
+		JDDNode tmp = encodeState(s);
+		tmp = JDD.Apply(JDD.TIMES, tmp, JDD.SetVectorElement(JDD.Constant(0), allDDNondetVars, i, 1));
+		tmp = JDD.And(tmp, model.getTrans01().copy());
+		// Add it into MTBDD for transition rewards
+		transRewards[rewardStructIndex] = JDD.Plus(transRewards[rewardStructIndex], JDD.Times(JDD.Constant(d), tmp));
+	}
+
+	/**
+	 * Stores transRewards in the required format for mtbdd.
+	 *
+	 * @param rewardStructIndex reward structure index
+	 * @param s source state index
+	 * @param i choice index
 	 * @param s2 target state index
 	 * @param d reward value
 	 */
@@ -550,7 +583,7 @@ public class ExplicitFiles2MTBDD
 		// Construct element of matrix MTBDD
 		JDDNode tmp = encodeStatePair(s, s2);
 		tmp = JDD.Apply(JDD.TIMES, tmp, JDD.SetVectorElement(JDD.Constant(0), allDDNondetVars, i, 1));
-		// Add it into MTBDD for state rewards
+		// Add it into MTBDD for transition rewards
 		transRewards[rewardStructIndex] = JDD.Plus(transRewards[rewardStructIndex], JDD.Times(JDD.Constant(d), tmp));
 	}
 

@@ -1,0 +1,305 @@
+//==============================================================================
+//
+//	Copyright (c) 2025-
+//	Authors:
+//	* Dave Parker <david.parker@cs.ox.ac.uk> (University of Oxford)
+//
+//------------------------------------------------------------------------------
+//
+//	This file is part of PRISM.
+//
+//	PRISM is free software; you can redistribute it and/or modify
+//	it under the terms of the GNU General Public License as published by
+//	the Free Software Foundation; either version 2 of the License, or
+//	(at your option) any later version.
+//
+//	PRISM is distributed in the hope that it will be useful,
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//	GNU General Public License for more details.
+//
+//	You should have received a copy of the GNU General Public License
+//	along with PRISM; if not, write to the Free Software Foundation,
+//	Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+//
+//==============================================================================
+
+package prism;
+
+import parser.EvaluateContext;
+import parser.VarList;
+import parser.ast.DeclarationType;
+import parser.type.Type;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+/**
+ * Simple storage of basic model info, implementing {@link ModelInfo}.
+ * Stores and provides access to mutable info about
+ * model type, variables, labels, etc.
+ */
+public class BasicModelInfo implements ModelInfo
+{
+	/** Constants, optionally */
+	private EvaluateContext ecConstants;
+	/** Model type */
+	private ModelType modelType;
+	/** Action list (optional) */
+	private List<Object> actionList;
+	/** Variable list */
+	private VarList varList;
+	/** Observable name list */
+	private List<String> observableNameList;
+	/** Observable type list */
+	private List<Type> observableTypeList;
+	/** Label names */
+	private List<String> labelNameList;
+	/** Player names */
+	private List<String> playerNameList;
+
+	// Constructors
+
+	/**
+	 * Construct a blank {@link BasicModelInfo}.
+	 */
+	public BasicModelInfo()
+	{
+		ecConstants = EvaluateContext.create();
+		actionList = null;
+		varList = new VarList();
+		observableNameList = new ArrayList<>();
+		observableTypeList = new ArrayList<>();
+		labelNameList = new ArrayList<>();
+		playerNameList = new ArrayList<>();
+	}
+
+	/**
+	 * Construct a {@link BasicModelInfo} with the specified model type.
+	 */
+	public BasicModelInfo(ModelType modelType)
+	{
+		this();
+		setModelType(modelType);
+	}
+
+	// Setters/getters for basic model info storage
+
+	/**
+	 * Set the model type.
+	 */
+	public void setModelType(ModelType modelType)
+	{
+		this.modelType = modelType;
+	}
+
+	/**
+	 * Set the list used to store actions.
+	 */
+	public void setActionList(List<Object> actionList)
+	{
+		this.actionList = actionList;
+	}
+
+	/**
+	 * Set the {@link VarList} used to store variable info.
+	 */
+	public void setVarList(VarList varList)
+	{
+		this.varList = varList;
+	}
+
+	/**
+	 * Set the list used to store observable names.
+	 */
+	public void setObservableNameList(List<String> observableNameList)
+	{
+		this.observableNameList = observableNameList;
+	}
+
+	/**
+	 * Set the list used to store observable types.
+	 */
+	public void setObservableTypeList(List<Type> observableTypeList)
+	{
+		this.observableTypeList = observableTypeList;
+	}
+
+	/**
+	 * Set the list used to store label names.
+	 */
+	public void setLabelNameList(List<String> labelNameList)
+	{
+		this.labelNameList = labelNameList;
+	}
+
+	/**
+	 * Set the list used to store player names.
+	 */
+	public void setPlayerNameList(List<String> playerNameList)
+	{
+		this.playerNameList = playerNameList;
+	}
+
+	/**
+	 * Get the list used to store actions (may be null).
+	 */
+	public List<Object> getActionList()
+	{
+		return actionList;
+	}
+
+	/**
+	 * Get the {@link VarList} used to store variable info.
+	 */
+	public VarList getVarList()
+	{
+		return varList;
+	}
+
+	/**
+	 * Get the list used to store observable names.
+	 */
+	public List<String> getObservableNameList()
+	{
+		return observableNameList;
+	}
+
+	/**
+	 * Get the list used to store observable types.
+	 */
+	public List<Type> getObservableTypeList()
+	{
+		return observableTypeList;
+	}
+
+	/**
+	 * Get the list used to store label names.
+	 */
+	public List<String> getLabelNameList()
+	{
+		return labelNameList;
+	}
+
+	/**
+	 * Get the list used to store player names.
+	 */
+	public List<String> getPlayerNameList()
+	{
+		return playerNameList;
+	}
+
+	// Methods to implement ModelInfo
+
+	@Override
+	public ModelType getModelType()
+	{
+		return modelType;
+	}
+
+	@Override
+	public void setSomeUndefinedConstants(EvaluateContext ecUndefined) throws PrismException
+	{
+		this.ecConstants = ecUndefined == null ? EvaluateContext.create() : EvaluateContext.create(ecUndefined);
+	}
+
+	@Override
+	public EvaluateContext getEvaluateContext()
+	{
+		return ecConstants;
+	}
+
+	@Override
+	public List<Object> getActions()
+	{
+		return actionList;
+	}
+
+	@Override
+	public int getNumVars()
+	{
+		// Override default implementation that calls (slow) getVarNames()
+		return varList.getNumVars();
+	}
+
+	@Override
+	public List<String> getVarNames()
+	{
+		int numVars = varList.getNumVars();
+		List<String> varNames = new ArrayList<>(numVars);
+		for (int i = 0; i < numVars; i++) {
+			varNames.add(varList.getName(i));
+		}
+		return varNames;
+		/*return IntStream.range(0, varList.getNumVars())
+				.mapToObj(varList::getName)
+				.collect(Collectors.toCollection(ArrayList::new));*/
+	}
+
+	@Override
+	public int getVarIndex(String name)
+	{
+		// Override default implementation that calls (slow) getVarNames()
+		return varList.getIndex(name);
+	}
+
+	@Override
+	public String getVarName(int i)
+	{
+		// Override default implementation that calls (slow) getVarNames()
+		return varList.getName(i);
+	}
+
+	@Override
+	public List<Type> getVarTypes()
+	{
+		int numVars = varList.getNumVars();
+		List<Type> varTypes = new ArrayList<>(numVars);
+		for (int i = 0; i < numVars; i++) {
+			varTypes.add(varList.getType(i));
+		}
+		return varTypes;
+		/*return IntStream.range(0, varList.getNumVars())
+				.mapToObj(varList::getType)
+				.collect(Collectors.toCollection(ArrayList::new));*/
+	}
+
+	@Override
+	public Type getVarType(int i) throws PrismException
+	{
+		// Override default implementation that calls (slow) getVarNames()
+		return varList.getType(i);
+	}
+
+	@Override
+	public DeclarationType getVarDeclarationType(int i)
+	{
+		return varList.getDeclarationType(i);
+	}
+
+	@Override
+	public List<String> getObservableNames()
+	{
+		return observableNameList;
+	}
+
+	@Override
+	public List<Type> getObservableTypes()
+	{
+		return  observableTypeList;
+	}
+
+	@Override
+	public List<String> getLabelNames()
+	{
+		return labelNameList;
+	}
+
+	@Override
+	public List<String> getPlayerNames()
+	{
+		return playerNameList;
+	}
+}

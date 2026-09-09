@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # Startup script for PRISM (Mac OS X)
 
@@ -38,9 +38,6 @@ if [ "$PRISM_JAVAMAXMEM" != "" ]; then
 		echo; echo "Error: Environment variable PRISM_JAVAMAXMEM is invalid."; exit
 	fi
 	PRISM_JAVAMAXMEM="-Xmx$PRISM_JAVAMAXMEM"
-else
-	# default
-	PRISM_JAVAMAXMEM="-Xmx1g"
 fi
 
 #### Java stack size handling (either via -javastack argument or PRISM_JAVASTACKSIZE environment variable)
@@ -70,6 +67,13 @@ fi
 
 ####
 
+# Add JVM parameters for JNI (if Java is new enough)
+PRISM_JAVA_VERSION=$(java -version 2>&1 | awk -F '"' '/version/ {print $2}')
+PRISM_JAVA_VERSION_MAJOR=$(echo "$PRISM_JAVA_VERSION" | cut -d. -f1)
+if [ "$PRISM_JAVA_VERSION_MAJOR" -ge 17 ]; then
+	PRISM_JAVA_PARAMS=${PRISM_JAVA_PARAMS}${PRISM_JAVA_PARAMS:+ }"--enable-native-access=ALL-UNNAMED"
+fi
+
 # JVM parameters via -javaparams switch
 ARGS=( "$@" )
 for ((i=0;i<${#ARGS[@]};i+=1)); do
@@ -90,19 +94,19 @@ done
 #  - PRISM jar file (for binary versions) (gets priority)
 #  - classes directory (most PRISM classes)
 #  - top-level directory (for images, dtds)
-#  - lib/pepa.zip (PEPA stuff)
 #  - lib/*.jar (all other jars)
-PRISM_CLASSPATH="$PRISM_DIR"/lib/prism.jar:"$PRISM_DIR"/classes:"$PRISM_DIR":"$PRISM_DIR"/lib/pepa.zip:"$PRISM_DIR"/lib/*
+PRISM_CLASSPATH="$PRISM_DIR"/lib/prism.jar:"$PRISM_DIR"/classes:"$PRISM_DIR":"$PRISM_DIR"/lib/*
 
 # Set up pointers to libraries
 PRISM_LIB_PATH="$PRISM_DIR"/lib
 
 # Copy library path to relevant vars
-DYLD_LIBRARY_PATH="${PRISM_LIB_PATH}${DYLD_LIBRARY_PATH:+:}${DYLD_LIBRARY_PATH}"
+#DYLD_LIBRARY_PATH="${PRISM_LIB_PATH}${DYLD_LIBRARY_PATH:+:}${DYLD_LIBRARY_PATH}"
 JAVA_LIBRARY_PATH="$PRISM_LIB_PATH"
 
 # Export environment variables
-export PRISM_DIR DYLD_LIBRARY_PATH
+export PRISM_DIR
+# export LD_LIBRARY_PATH
 
 # Main Java class to launch
 PRISM_MAINCLASS=${PRISM_MAINCLASS:-prism.PrismCL}

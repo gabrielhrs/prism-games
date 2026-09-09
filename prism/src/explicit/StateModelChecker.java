@@ -37,57 +37,32 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.Vector;
 
+import common.Interval;
 import explicit.rewards.ConstructRewards;
 import explicit.rewards.Rewards;
 import io.DotExporter;
 import io.DRNExporter;
+import io.UMBExporter;
 import io.MatlabExporter;
+import io.ModelExportFormat;
 import io.ModelExportOptions;
+import io.ModelExportTask;
+import io.ModelExportZipper;
+import io.ModelExporter;
 import io.PrismExplicitExporter;
 import io.PrismExplicitImporter;
 import parser.EvaluateContext.EvalMode;
 import parser.State;
 import parser.Values;
 import parser.VarList;
-import parser.ast.Declaration;
-import parser.ast.DeclarationIntUnbounded;
-import parser.ast.Expression;
-import parser.ast.ExpressionBinaryOp;
-import parser.ast.ExpressionConstant;
-import parser.ast.ExpressionFilter;
+import parser.ast.*;
 import parser.ast.ExpressionFilter.FilterOperator;
-import parser.ast.ExpressionFormula;
-import parser.ast.ExpressionFunc;
-import parser.ast.ExpressionITE;
-import parser.ast.ExpressionIdent;
-import parser.ast.ExpressionLabel;
-import parser.ast.ExpressionLiteral;
-import parser.ast.ExpressionObs;
-import parser.ast.ExpressionProp;
-import parser.ast.ExpressionUnaryOp;
-import parser.ast.ExpressionVar;
-import parser.ast.LabelList;
-import parser.ast.ModulesFile;
-import parser.ast.PropertiesFile;
-import parser.ast.Property;
 import parser.type.TypeBool;
 import parser.type.TypeDouble;
 import parser.visitor.ASTTraverseModify;
 import parser.visitor.ReplaceLabels;
-import prism.Accuracy;
+import prism.*;
 import prism.Filter;
-import prism.ModelInfo;
-import prism.ModelType;
-import prism.Prism;
-import prism.PrismComponent;
-import prism.PrismException;
-import prism.PrismFileLog;
-import prism.PrismLangException;
-import prism.PrismLog;
-import prism.PrismNotSupportedException;
-import prism.PrismSettings;
-import prism.Result;
-import prism.RewardGenerator;
 
 /**
  * Super class for explicit-state model checkers.
@@ -225,10 +200,14 @@ public class StateModelChecker extends PrismComponent
 			mc = new SMGModelChecker(parent);
 			break;
 		case IDTMC:
-			mc = new IDTMCModelChecker(parent);
+			mc = new UDTMCModelChecker(parent);
 			break;
 		case IMDP:
-			mc = new IMDPModelChecker(parent);
+			mc = new UMDPModelChecker(parent);
+			break;
+		case IPOMDP:
+			// For model construction, this suffices
+			mc = new UMDPModelChecker(parent);
 			break;
 		case LTS:
 			mc = new NonProbModelChecker(parent);
@@ -518,29 +497,6 @@ public class StateModelChecker extends PrismComponent
 		}
 	}
 
-	/**
-	 * Return the set of label names that are defined
-	 * either by the model (from the model info or modules file)
-	 * or properties file (if attached to the model checker).
-	 */
-	public Set<String> getDefinedLabelNames()
-	{
-		TreeSet<String> definedLabelNames = new TreeSet<String>();
-
-		// labels from the label list
-		LabelList labelList = getLabelList();
-		if (labelList != null) {
-			definedLabelNames.addAll(labelList.getLabelNames());
-		}
-
-		// labels from the model info
-		if (modelInfo != null) {
-			definedLabelNames.addAll(modelInfo.getLabelNames());
-		}
-
-		return definedLabelNames;
-	}
-
 	// Other setters/getters
 
 	/**
@@ -604,7 +560,7 @@ public class StateModelChecker extends PrismComponent
 			mainLog.println("Modified property: " + exprNew);
 			expr = exprNew;
 			//model.exportToPrismExplicitTra("bisim.tra");
-			//model.exportStates(Prism.EXPORT_PLAIN, modelInfo.createVarList(), new PrismFileLog("bisim.sta"));
+			//model.exportStates(modelInfo.createVarList(), new PrismFileLog("bisim.sta"), new ModelExportOptions());
 		}
 
 		// Do model checking and store result vector
@@ -950,6 +906,9 @@ public class StateModelChecker extends PrismComponent
 	protected StateValues checkExpressionObs(Model<?> model, ExpressionObs expr, BitSet statesOfInterest) throws PrismException
 	{
 		PartiallyObservableModel<?> poModel = (PartiallyObservableModel<?>) model;
+		if (modelInfo == null) {
+			throw new PrismException("No information about observable names is available");
+		}
 		int iObservable = modelInfo.getObservableIndex(expr.getName());
 		return StateValues.create(expr.getType(), i -> poModel.getObservationAsState(i).varValues[iObservable], model);
 	}
@@ -1349,7 +1308,7 @@ public class StateModelChecker extends PrismComponent
 			String currentLabel = "L"+i;
 			// Attach satisfaction set for Li to the model, record necessary
 			// label renaming
-			String newLabel = model.addUniqueLabel("phi", labelBS.get(i), getDefinedLabelNames());
+			String newLabel = model.addUniqueLabel("phi", labelBS.get(i), getDefinedLabelNames(model));
 			labelReplacements.put(currentLabel, newLabel);
 		}
 		// rename the labels
@@ -1444,7 +1403,7 @@ public class StateModelChecker extends PrismComponent
 			// Look up property and recurse
 			Property prop = propertiesFile.lookUpPropertyObjectByName(e.getName());
 			if (prop != null) {
-				return e.accept(this);
+				return prop.getExpression().accept(this);
 			} else {
 				throw new PrismLangException("Unknown property reference " + e, e);
 			}
@@ -1494,52 +1453,443 @@ public class StateModelChecker extends PrismComponent
 	}
 
 	/**
-	 * Construct rewards for the reward structure with index r of the reward generator and a model.
-	 * Ensures non-negative rewards.
+	 * Get the {@link VarList} object for the provided model,
+	 * containing info about variables. If one is attached to
+	 * the model, this takes priority. If not, get one from
+	 * an attached {@link ModelInfo}. Failing that, an
+	 * exception is thrown.
+	 */
+	protected <Value> VarList getVarList(Model<Value> model) throws PrismException
+	{
+		if (model.getVarList() != null) {
+			return model.getVarList();
+		}
+		if (modelInfo != null) {
+			return modelInfo.createVarList();
+		}
+		throw new PrismException("No variable information available for model");
+	}
+
+	/**
+	 * Get a {@link ModelInfo} object for the provided model,
+	 * containing info about model type, variables and labels.
+	 * If this is already stored locally in {@link #modelInfo}, use that.
+	 * If not construct one from data attached to the model.
+	 */
+	protected <Value> ModelInfo getModelInfo(Model<Value> model) throws PrismException
+	{
+		if (modelInfo != null) {
+			return modelInfo;
+		}
+		BasicModelInfo modelInfo = new BasicModelInfo(model.getModelType());
+		if (model.getVarList() != null) {
+			modelInfo.setVarList(model.getVarList());
+		}
+		model.getLabels().forEach(label -> modelInfo.getLabelNameList().add(label));
+		return modelInfo;
+	}
+
+	/**
+	 * Get the names of all the labels relevant/available for a model: those from the
+	 * stored model info, if present, plus any additional labels attached directly
+	 * to the model that are not already included.
+	 */
+	protected List<String> getAllLabelNames(Model<?> model) throws PrismException
+	{
+		List<String> labelNames = new ArrayList<>();
+		if (modelInfo != null) {
+			labelNames.addAll(modelInfo.getLabelNames());
+		}
+		for (String name : model.getLabels()) {
+			if (!labelNames.contains(name)) {
+				labelNames.add(name);
+			}
+		}
+		return labelNames;
+	}
+
+	/**
+	 * Return the set of label names that are defined either for a model
+	 * (stored either in the model info or directly attached) or in the
+	 * properties file (if attached to the model checker).
+	 */
+	public Set<String> getDefinedLabelNames(Model<?> model) throws PrismException
+	{
+		TreeSet<String> definedLabelNames = new TreeSet<>(getAllLabelNames(model));
+		LabelList labelList = getLabelList();
+		if (labelList != null) {
+			definedLabelNames.addAll(labelList.getLabelNames());
+		}
+		return definedLabelNames;
+	}
+
+	/**
+	 * Get a {@link RewardGenerator} object for the provided model,
+	 * containing info about rewards and access to them.
+	 * This potentially combines rewards provided by both the (stored) {@link #rewardGen}
+	 * and rewards attached directly to the model. If a reward (specified by name/position)
+	 * is available from both sources, the directly attached one is given preference.
+	 * The full list of rewards available includes those from {@link #rewardGen},
+	 * if present, and then any additional attached ones, if any.
+	 */
+	@SuppressWarnings("unchecked")
+	protected <Value> RewardGenerator<Value> getRewardGenerator(Model<Value> model) throws PrismException
+	{
+		return new CombinedRewardGenerator<>(model, (RewardGenerator<Value>) rewardGen);
+	}
+
+	/**
+	 * A {@link RewardGenerator} as required for {@link #getRewardGenerator(Model)}.
+	 */
+	protected static class CombinedRewardGenerator<Value> implements RewardGenerator<Value>
+	{
+		private final Model<Value> model;
+		private final RewardGenerator<Value> rewardGen;
+
+		public CombinedRewardGenerator(Model<Value> model, RewardGenerator<Value> rewardGen)
+		{
+			this.model = model;
+			this.rewardGen = rewardGen;
+		}
+
+		// Methods to implement RewardInfo
+
+		@Override
+		public List<String> getRewardStructNames()
+		{
+			List<String> names = new ArrayList<>();
+			if (rewardGen != null) {
+				names.addAll(rewardGen.getRewardStructNames());
+				for (int i : getExtraModelRewardIndices()) {
+					names.add(model.getRewardName(i));
+				}
+			} else {
+				int numRewards = model.getNumRewards();
+				for (int i = 0; i < numRewards; i++) {
+					names.add(model.getRewardName(i));
+				}
+			}
+			return names;
+		}
+
+		@Override
+		public boolean rewardStructHasStateRewards(int r)
+		{
+			Rewards<Value> attached = getModelAttachedRewards(r);
+			if (attached != null) {
+				return attached.hasStateRewards();
+			}
+			if (rewardGen != null && r < rewardGen.getNumRewardStructs()) {
+				return rewardGen.rewardStructHasStateRewards(r);
+			}
+			return true;
+		}
+
+		@Override
+		public boolean rewardStructHasTransitionRewards(int r)
+		{
+			Rewards<Value> attached = getModelAttachedRewards(r);
+			if (attached != null) {
+				return attached.hasTransitionRewards();
+			}
+			if (rewardGen != null && r < rewardGen.getNumRewardStructs()) {
+				return rewardGen.rewardStructHasTransitionRewards(r);
+			}
+			return true;
+		}
+
+		// Methods to implement RewardGenerator
+
+		@Override
+		public Evaluator<Value> getRewardEvaluator()
+		{
+			return rewardGen != null ? rewardGen.getRewardEvaluator() : model.getEvaluator();
+		}
+
+		@Override
+		public boolean isRewardLookupSupported(RewardLookup lookup)
+		{
+			int numRewards = getNumRewardStructs();
+			for (int r = 0; r < numRewards; r++) {
+				if (isRewardLookupSupported(r, lookup)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		@Override
+		public boolean isRewardLookupSupported(int r, RewardLookup lookup)
+		{
+			if (getModelAttachedRewards(r) != null) {
+				switch (lookup) {
+				case BY_REWARD_OBJECT:
+				case BY_STATE_INDEX:
+					return true;
+				case BY_STATE:
+					return model.getStatesList() != null;
+				default:
+					return false;
+				}
+			}
+			if (rewardGen != null && r < rewardGen.getNumRewardStructs()) {
+				return rewardGen.isRewardLookupSupported(r, lookup);
+			}
+			return false;
+		}
+
+		@Override
+		public Value getStateReward(int r, State state, boolean allowNegative) throws PrismException
+		{
+			Rewards<Value> attached = getModelAttachedRewards(r);
+			if (attached != null) {
+				return getStateReward(r, lookUpStateIndex(state), allowNegative);
+			}
+			if (rewardGen != null && r < rewardGen.getNumRewardStructs()) {
+				return rewardGen.getStateReward(r, state, allowNegative);
+			}
+			throw new PrismException("Invalid reward index " + r);
+		}
+
+		@Override
+		public Value getStateReward(int r, int s, boolean allowNegative) throws PrismException
+		{
+			Rewards<Value> attached = getModelAttachedRewards(r);
+			if (attached != null) {
+				Value rew = attached.getStateReward(s);
+				checkNonNegative(rew, allowNegative, s);
+				return rew;
+			}
+			if (rewardGen != null && r < rewardGen.getNumRewardStructs()) {
+				return rewardGen.getStateReward(r, s, allowNegative);
+			}
+			throw new PrismException("Invalid reward index " + r);
+		}
+
+		@Override
+		public Value getStateActionReward(int r, State state, Object action, boolean allowNegative) throws PrismException
+		{
+			Rewards<Value> attached = getModelAttachedRewards(r);
+			if (attached != null) {
+				return getStateActionReward(r, lookUpStateIndex(state), action, allowNegative);
+			}
+			if (rewardGen != null && r < rewardGen.getNumRewardStructs()) {
+				return rewardGen.getStateActionReward(r, state, action, allowNegative);
+			}
+			throw new PrismException("Invalid reward index " + r);
+		}
+
+		@Override
+		@SuppressWarnings("unchecked")
+		public Value getStateActionReward(int r, int s, Object action, boolean allowNegative) throws PrismException
+		{
+			Rewards<Value> attached = getModelAttachedRewards(r);
+			if (attached != null) {
+				int i;
+				if (model instanceof NondetModel) {
+					i = ((NondetModel<Value>) model).getChoiceByAction(s, action);
+				} else if (model instanceof DTMC) {
+					i = ((DTMC<Value>) model).getTransitionByAction(s, action);
+				} else if (model instanceof IDTMC) {
+					i = ((IDTMC<Value>) model).getIntervalModel().getTransitionByAction(s, action);
+				} else {
+					throw new PrismException("State-action reward lookup not supported for model type " + model.getModelType() + "s");
+				}
+				Value rew = attached.getTransitionReward(s, i);
+				checkNonNegative(rew, allowNegative, s);
+				return rew;
+			}
+			if (rewardGen != null && r < rewardGen.getNumRewardStructs()) {
+				return rewardGen.getStateActionReward(r, s, action, allowNegative);
+			}
+			throw new PrismException("Invalid reward index " + r);
+		}
+
+		@Override
+		public Rewards<Value> getRewardObject(int r) throws PrismException
+		{
+			Rewards<Value> attached = getModelAttachedRewards(r);
+			if (attached != null) {
+				return attached;
+			}
+			if (rewardGen != null && r < rewardGen.getNumRewardStructs()) {
+				return rewardGen.getRewardObject(r);
+			}
+			throw new PrismException("Invalid reward index " + r);
+		}
+
+		@Override
+		public Model<Value> getRewardObjectModel()
+		{
+			return model;
+		}
+
+		/**
+		 * Look up the (0-based) list indices, within {@link Model#getRewards(int)}, of the
+		 * reward structures attached to {@link #model} that are not claimed by (i.e., do not
+		 * match the position or name of) any of the underlying {@link #rewardGen}'s own reward
+		 * structures. These are appended, in list order, after the underlying generator's own
+		 * reward structures, whether they are named or not (an unnamed one contributes "" to
+		 * {@link #getRewardStructNames()}, as for any other unnamed reward structure).
+		 * Only valid to call if {@link #rewardGen} is not {@code null}.
+		 */
+		private List<Integer> getExtraModelRewardIndices()
+		{
+			List<Integer> extra = new ArrayList<>();
+			int numRewards = model.getNumRewards();
+			for (int i = 0; i < numRewards; i++) {
+				Integer position = model.getRewardPosition(i);
+				String name = model.getRewardName(i);
+				boolean claimedByPosition = position != null && position >= 0 && position < rewardGen.getNumRewardStructs();
+				boolean claimedByName = name != null && !name.isEmpty() && rewardGen.getRewardStructIndex(name) != -1;
+				if (!claimedByPosition && !claimedByName) {
+					extra.add(i);
+				}
+			}
+			return extra;
+		}
+
+		/**
+		 * Look up the reward structure attached directly to {@link #model} that corresponds
+		 * to reward structure index {@code r} of this combined generator, if any (else
+		 * {@code null}). If there is an underlying {@link #rewardGen}, and {@code r} refers
+		 * to one of its reward structures, the model's attached rewards are checked for a
+		 * matching position or name (an error if they refer to different reward structures);
+		 * for indices beyond the underlying generator's own, the corresponding extra (see
+		 * {@link #getExtraModelRewardIndices()}) model-attached reward structure is used. If
+		 * there is no underlying generator, the model's attached rewards are used directly, by
+		 * (0-based) list position.
+		 */
+		private Rewards<Value> getModelAttachedRewards(int r)
+		{
+			if (rewardGen == null) {
+				return r >= 0 && r < model.getNumRewards() ? model.getRewards(r) : null;
+			}
+			int numFromGen = rewardGen.getNumRewardStructs();
+			if (r < numFromGen) {
+				Rewards<Value> byPosition = model.getRewardsByPosition(r);
+				Rewards<Value> byName = model.getRewardsByName(rewardGen.getRewardStructName(r));
+				if (byPosition != null && byName != null && byPosition != byName) {
+					throw new IllegalArgumentException("Reward structure at position " + r + " and name \"" + rewardGen.getRewardStructName(r) + "\" refer to different reward structures attached to the model");
+				}
+				return byPosition != null ? byPosition : byName;
+			}
+			List<Integer> extra = getExtraModelRewardIndices();
+			int j = r - numFromGen;
+			return j >= 0 && j < extra.size() ? model.getRewards(extra.get(j)) : null;
+		}
+
+		/**
+		 * Look up the index of a state by its {@link State} object, for use by the
+		 * {@code State}-based reward lookup methods. Throws a {@link PrismException} if
+		 * the model has no states list, or the state is not found in it.
+		 */
+		private int lookUpStateIndex(State state) throws PrismException
+		{
+			List<State> statesList = model.getStatesList();
+			if (statesList == null) {
+				throw new PrismException("Reward lookup by State not possible since state list is missing");
+			}
+			int s = statesList.indexOf(state);
+			if (s == -1) {
+				throw new PrismException("Unknown state " + state);
+			}
+			return s;
+		}
+
+		/**
+		 * Check that a reward value looked up from a model-attached {@link Rewards} object is
+		 * non-negative, unless {@code allowNegative} is true. Throws a {@link PrismException} if not.
+		 */
+		private void checkNonNegative(Value rew, boolean allowNegative, int s) throws PrismException
+		{
+			if (!allowNegative && !getRewardEvaluator().geq(rew, getRewardEvaluator().zero())) {
+				throw new PrismException("Reward is negative (" + rew + ") at state " + s);
+			}
+		}
+	}
+
+	/**
+	 * Construct rewards for the reward structure with index {@code r}.
+	 * This is the (0-indexed) index within the list of available rewards for the model
+	 * which may include a combination of those that can be obtained/constructed from the
+	 * reward generator or are already attached to the model (see {@link #getRewardGenerator(Model)}).
 	 * <br>
-	 * Note: Relies on the stored RewardGenerator for constructing the reward structure.
+	 * Ensures non-negative rewards, except for CSGs, where rewards may be positive and
+	 * negative, i.e., weights.
 	 */
 	protected <Value> Rewards<Value> constructRewards(Model<Value> model, int r) throws PrismException
 	{
-		return constructRewards(model, r, model.getModelType() == ModelType.CSG);
+		return constructRewards(model, r, model.getModelType() == ModelType.CSG, false);
 	}
 
 	/**
-	 * Construct rewards for the reward structure with index r of the reward generator and a model.
+	 * Construct rewards for the reward structure with index {@code r}.
+	 * This is the (0-indexed) index within the list of available rewards for the model
+	 * which may include a combination of those that can be obtained/constructed from the
+	 * reward generator or are already attached to the model (see {@link #getRewardGenerator(Model)}).
 	 * <br>
-	 * If {@code allowNegativeRewards} is true, the rewards may be positive and negative, i.e., weights.
-	 * <br>
-	 * Note: Relies on the stored RewardGenerator for constructing the reward structure.
+	 * If {@code allowNegativeRewards} is true, the rewards may be positive and negative;
+	 * otherwise, rewards are checked to ensure that they are non-negative, whether
+	 * freshly constructed or attached directly to the model.
 	 */
-	@SuppressWarnings("unchecked")
 	protected <Value> Rewards<Value> constructRewards(Model<Value> model, int r, boolean allowNegativeRewards) throws PrismException
 	{
-		ConstructRewards constructRewards = new ConstructRewards(this);
-		if (allowNegativeRewards)
-			constructRewards.allowNegativeRewards();
-		return constructRewards.buildRewardStructure(model, (RewardGenerator<Value>) rewardGen, r);
+		return constructRewards(model, r, allowNegativeRewards, false);
 	}
 
 	/**
-	 * Construct expected rewards for the reward structure with index r of the reward generator and a model,
-	 * i.e., using probability-weighted sum for any rewards attached to transitions,
-	 * assigning them to states/choices.
-	 * Ensures non-negative rewards.
+	 * Construct rewards for the reward structure with index {@code r}.
+	 * This is the (0-indexed) index within the list of available rewards for the model
+	 * which may include a combination of those that can be obtained/constructed from the
+	 * reward generator or are already attached to the model (see {@link #getRewardGenerator(Model)}).
 	 * <br>
-	 * Note: Relies on the stored RewardGenerator for constructing the reward structure.
+	 * Ensures non-negative rewards, except for CSGs, where rewards may be positive and
+	 * negative, i.e., weights.
 	 */
 	protected <Value> Rewards<Value> constructExpectedRewards(Model<Value> model, int r) throws PrismException
 	{
-		if (model.getModelType() == ModelType.IDTMC && rewardGen.rewardStructHasTransitionRewards(r)) {
-			throw new PrismNotSupportedException("Transition rewards not supported for " + model.getModelType() + "s");
+		return constructRewards(model, r, model.getModelType() == ModelType.CSG, true);
+	}
 
+	/**
+	 * Construct rewards for the reward structure with index {@code r}.
+	 * This is the (0-indexed) index within the list of available rewards for the model
+	 * which may include a combination of those that can be obtained/constructed from the
+	 * reward generator or are already attached to the model (see {@link #getRewardGenerator(Model)}).
+	 * <br>
+	 * If {@code allowNegativeRewards} is true, the rewards may be positive and negative;
+	 * otherwise, rewards are checked to ensure that they are non-negative, whether
+	 * freshly constructed or attached directly to the model.
+	 * <br>
+	 * If {@code expected} is true, expected rewards are constructed, i.e., using
+	 * probability-weighted sums for any rewards attached to transitions.
+	 */
+	protected <Value> Rewards<Value> constructRewards(Model<Value> model, int r, boolean allowNegativeRewards, boolean expected) throws PrismException
+	{
+		RewardGenerator<Value> combinedRewardGen = getRewardGenerator(model);
+		if (expected && model.getModelType() == ModelType.IDTMC && combinedRewardGen.rewardStructHasTransitionRewards(r)) {
+			throw new PrismNotSupportedException("Transition rewards not supported for " + model.getModelType() + "s");
 		}
-		ConstructRewards constructRewards = new ConstructRewards(this);
-		constructRewards.setExpectedRewards(true);
-		if (model.getModelType() == ModelType.CSG) {
-			constructRewards.allowNegativeRewards();
+		ConstructRewards constructRewards = new ConstructRewards(this).setAllowNegativeRewards(allowNegativeRewards).setExpectedRewards(expected);
+		return constructRewards.buildRewardStructure(model, combinedRewardGen, r);
+	}
+
+	/**
+	 * Get values and names for all the reward structures relevant/available for a model,
+	 * which may include a combination of those that can be obtained/constructed from the
+	 * reward generator or are already attached to the model (see {@link #getRewardGenerator(Model)}).
+	 */
+	protected <Value> Pair<List<Rewards<Value>>, List<String>> getAllRewards(Model<Value> model) throws PrismException
+	{
+		RewardGenerator<Value> combinedRewardGen = getRewardGenerator(model);
+		List<String> rewardNames = new ArrayList<>(combinedRewardGen.getRewardStructNames());
+		List<Rewards<Value>> rewards = new ArrayList<>(rewardNames.size());
+		ConstructRewards constructRewards = new ConstructRewards(this).allowNegativeRewards();
+		for (int r = 0; r < rewardNames.size(); r++) {
+			rewards.add(constructRewards.buildRewardStructure(model, combinedRewardGen, r));
 		}
-		return constructRewards.buildRewardStructure(model, (RewardGenerator<Value>) rewardGen, r);
+		return new Pair<>(rewards, rewardNames);
 	}
 
 	/**
@@ -1555,129 +1905,198 @@ public class StateModelChecker extends PrismComponent
 	}
 
 	/**
-	 * Export various aspects of a model, combined.
+	 * Export a model.
 	 * @param model The model
-	 * @param labelNames Names of labels to include in export
-	 * @param out Where to export
-	 * @param exportOptions The options for export
+	 * @param exportTask Export task (destination, which parts of the model to export, options)
 	 */
-	public <Value> void exportModelCombined(Model<Value> model, List<String> labelNames, PrismLog out, ModelExportOptions exportOptions) throws PrismException
+	public <Value> void exportModel(Model<Value> model, ModelExportTask exportTask) throws PrismException
 	{
-		if (exportOptions.getFormat() != ModelExportOptions.ModelExportFormat.DRN) {
-			return;
+		ModelExportOptions exportOptions = exportTask.getExportOptions();
+		// Build an exporter of the required type
+		ModelExporter<Value> exporter;
+		switch (exportOptions.getFormat()) {
+			case EXPLICIT:
+				if (exportOptions.getExplicitRows()) {
+					throw new PrismNotSupportedException("Export in rows format not yet supported by explicit engine");
+				}
+				exporter = new PrismExplicitExporter<>(exportOptions);
+				break;
+			case DOT:
+				exporter = new DotExporter<>(exportOptions);
+				break;
+			case DRN:
+				exporter = new DRNExporter<>(exportOptions);
+				break;
+			case UMB:
+				exporter = new UMBExporter<>(exportOptions);
+				break;
+			default:
+				throw new PrismNotSupportedException("Export " + exportOptions.getFormat().description() + " not supported by explicit engine");
 		}
-		List<Rewards<Value>> rewards = new ArrayList<>();
-		for (int r = 0; r < rewardGen.getNumRewardStructs(); r++) {
-			rewards.add(constructRewards(model, r));
+		exporter.setModelInfo(getModelInfo(model));
+		File file = exportTask.getFile();
+		// Disallow stdout export for binary formats
+		if (exportOptions.getFormat().isBinary() && !exportOptions.getBinaryAsText() && file == null) {
+			throw new PrismNotSupportedException("Export " + exportOptions.getFormat().description() + " must be to a file");
 		}
-		List<BitSet> labelStates = checkLabels(model, labelNames);
-		DRNExporter<Value> exporter = new DRNExporter<>(exportOptions);
-		exporter.exportModel(model, (RewardGenerator<Value>) rewardGen, rewards, labelNames, labelStates, out);
+		// Disallow zipped export to stdout (other than for UMB, which is zipped separately)
+		if (exportOptions.getZipped() && exportOptions.getFormat() != ModelExportFormat.UMB && file == null) {
+			throw new PrismNotSupportedException("Cannot zip export to standard output");
+		}
+		// Add rewards to exporter if requested
+		if (exportOptions.getShowRewards()) {
+			Pair<List<Rewards<Value>>, List<String>> allRewards = getAllRewards(model);
+			exporter.setRewardEvaluator(getRewardGenerator(model).getRewardEvaluator());
+			exporter.addRewards(allRewards.first, allRewards.second);
+		}
+		// Add labels to exporter if requested
+		if (exportOptions.getShowLabels()) {
+			List<String> labelNames = new ArrayList<>();
+			if (exportTask.initLabelIncluded()) {
+				labelNames.add("init");
+			}
+			if (exportTask.deadlockLabelIncluded()) {
+				labelNames.add("deadlock");
+			}
+			labelNames.addAll(getAllLabelNames(model));
+			// If labels from a properties file were requested (and one is attached), add those too
+			if (exportTask.extraLabelsUsed() && propertiesFile != null) {
+				for (String name : propertiesFile.getCombinedLabelList().getLabelNames()) {
+					if (!labelNames.contains(name)) {
+						labelNames.add(name);
+					}
+				}
+			}
+			List<BitSet> labelStates = checkLabels(model, labelNames);
+			exporter.addLabels(labelStates, labelNames);
+		}
+		// Export to file/log
+		if (exportOptions.getFormat().isBinary() && !exportOptions.getBinaryAsText()) {
+			exporter.exportModel(model, file);
+		} else {
+			try (PrismLog out = getPrismLogForFile(file)) {
+				exporter.exportModel(model, out);
+			}
+		}
+		// Zip the exported file, if requested
+		ModelExportZipper.zipIfRequested(exportTask);
 	}
 
 	/**
-	 * Export the transition matrix of a model.
-	 * @param model The model
-	 * @param out Where to export
+	 * Export the transition function/matrix of a model.
+	 * @param file File to export to (if null, print to the log instead)
 	 * @param exportOptions The options for export
 	 */
-	public <Value> void exportTransitions(Model<Value> model, PrismLog out, ModelExportOptions exportOptions) throws PrismException
+	public <Value> void exportTransitions(Model<Value> model, File file, ModelExportOptions exportOptions) throws PrismException
 	{
-		switch (exportOptions.getFormat()) {
-			case EXPLICIT:
-				new PrismExplicitExporter<Value>(exportOptions).exportTransitions(model, out);
-				break;
-			case MATLAB:
-				throw new PrismNotSupportedException("Export not yet supported");
-			case DOT:
-				new DotExporter<Value>(exportOptions).exportModel(model, out, null);
-				break;
-		}
+		exportModel(model, ModelExportTask.fromOptions(file, exportOptions));
 	}
 
 	/**
 	 * Export the state rewards for one reward structure of a model.
 	 * @param model The model
 	 * @param r Index of reward structure to export (0-indexed)
-	 * @param out Where to export
+	 * @param file File to export to (if null, print to the log instead)
 	 * @param exportOptions The options for export
 	 */
-	public <Value> void exportStateRewards(Model<Value> model, int r, PrismLog out, ModelExportOptions exportOptions) throws PrismException
+	public <Value> void exportStateRewards(Model<Value> model, int r, File file, ModelExportOptions exportOptions) throws PrismException
 	{
-		if (exportOptions.getFormat() != ModelExportOptions.ModelExportFormat.EXPLICIT) {
+		if (exportOptions.getFormat() != ModelExportFormat.EXPLICIT) {
 			throw new PrismNotSupportedException("Exporting state rewards in the requested format is currently not supported by the explicit engine");
 		}
 
-		Rewards<Value> modelRewards = constructRewards(model, r);
-		PrismExplicitExporter<Value> exporter = new PrismExplicitExporter<>(exportOptions);
-		exporter.exportStateRewards(model, modelRewards, rewardGen.getRewardStructName(r), out);
+		// Construct rewards before opening the output file:
+		// the rewards may be read lazily from an import file which could be the same as the export target.
+		String rewardStructName = getRewardGenerator(model).getRewardStructName(r);
+		Rewards<Value> modelRewards = constructRewards(model, r, true);
+		try (PrismLog out = getPrismLogForFile(file)) {
+			PrismExplicitExporter<Value> exporter = new PrismExplicitExporter<>(exportOptions);
+			exporter.exportStateRewards(model, modelRewards, rewardStructName, out);
+		}
+		ModelExportZipper.zipIfRequested(file, exportOptions);
 	}
 
 	/**
 	 * Export the transition rewards for one reward structure of a model.
 	 * @param model The model
 	 * @param r Index of reward structure to export (0-indexed)
-	 * @param out Where to export
+	 * @param file File to export to (if null, print to the log instead)
 	 * @param exportOptions The options for export
 	 */
-	public <Value> void exportTransRewards(Model<Value> model, int r, PrismLog out, ModelExportOptions exportOptions) throws PrismException
+	public <Value> void exportTransRewards(Model<Value> model, int r, File file, ModelExportOptions exportOptions) throws PrismException
 	{
-		if (exportOptions.getFormat() != ModelExportOptions.ModelExportFormat.EXPLICIT) {
+		if (exportOptions.getFormat() != ModelExportFormat.EXPLICIT) {
 			throw new PrismNotSupportedException("Exporting transition rewards in the requested format is currently not supported by the explicit engine");
 		}
 
-		Rewards<Value> modelRewards = constructRewards(model, r);
-		PrismExplicitExporter<Value> exporter = new PrismExplicitExporter<>(exportOptions);
-		exporter.exportTransRewards(model, modelRewards, rewardGen.getRewardStructName(r), out);
+		// Construct rewards before opening the output file:
+		// the rewards may be read lazily from an import file which could be the same as the export target.
+		String rewardStructName = getRewardGenerator(model).getRewardStructName(r);
+		Rewards<Value> modelRewards = constructRewards(model, r, true);
+		try (PrismLog out = getPrismLogForFile(file)) {
+			PrismExplicitExporter<Value> exporter = new PrismExplicitExporter<>(exportOptions);
+			exporter.exportTransRewards(model, modelRewards, rewardStructName, out);
+		}
+		ModelExportZipper.zipIfRequested(file, exportOptions);
 	}
 
 	/**
 	 * Export the set of states for a model.
 	 * @param model The model
-	 * @param out Where to export
+	 * @param file File to export to (if null, print to the log instead)
 	 * @param exportOptions The options for export
 	 */
-	public <Value> void exportStates(Model<Value> model, PrismLog out, ModelExportOptions exportOptions) throws PrismException
+	public <Value> void exportStates(Model<Value> model, File file, ModelExportOptions exportOptions) throws PrismException
 	{
-		switch (exportOptions.getFormat()) {
-			case EXPLICIT:
-				new PrismExplicitExporter<Value>(exportOptions).exportStates(model, modelInfo.createVarList(), out);
-				break;
-			case MATLAB:
-				new MatlabExporter<Value>(exportOptions).exportStates(model, modelInfo.createVarList(), out);
-				break;
+		VarList varList = getVarList(model);
+		try (PrismLog out = getPrismLogForFile(file)) {
+			switch (exportOptions.getFormat()) {
+				case EXPLICIT:
+					new PrismExplicitExporter<Value>(exportOptions).exportStates(model, varList, out);
+					break;
+				case MATLAB:
+					new MatlabExporter<Value>(exportOptions).exportStates(model, varList, out);
+					break;
+			}
 		}
+		ModelExportZipper.zipIfRequested(file, exportOptions);
 	}
 
 	/**
 	 * Export the observations for a (partially observable) model.
 	 * @param model The model
-	 * @param out Where to export
+	 * @param file File to export to (if null, print to the log instead)
 	 * @param exportOptions The options for export
 	 */
-	public <Value> void exportObservations(Model<Value> model, PrismLog out, ModelExportOptions exportOptions) throws PrismException
+	public <Value> void exportObservations(Model<Value> model, File file, ModelExportOptions exportOptions) throws PrismException
 	{
-		switch (exportOptions.getFormat()) {
-			case EXPLICIT:
-				new PrismExplicitExporter<Value>(exportOptions).exportObservations((PartiallyObservableModel<Value>) model, modelInfo, out);
-				break;
-			case MATLAB:
-				new MatlabExporter<Value>(exportOptions).exportObservations((PartiallyObservableModel<Value>) model, modelInfo, out);
-				break;
+		if (modelInfo == null) {
+			throw new PrismException("No information about observable names is available");
 		}
+		try (PrismLog out = getPrismLogForFile(file)) {
+			switch (exportOptions.getFormat()) {
+				case EXPLICIT:
+					new PrismExplicitExporter<Value>(exportOptions).exportObservations((PartiallyObservableModel<Value>) model, modelInfo, out);
+					break;
+				case MATLAB:
+					new MatlabExporter<Value>(exportOptions).exportObservations((PartiallyObservableModel<Value>) model, modelInfo, out);
+					break;
+			}
+		}
+		ModelExportZipper.zipIfRequested(file, exportOptions);
 	}
 
 	/**
 	 * Export a set of labels and the states that satisfy them.
 	 * @param model The model
 	 * @param labelNames The names of the labels to export
-	 * @param out Where to export
+	 * @param file File to export to (if null, print to the log instead)
 	 * @param exportOptions The options for export
 	 */
-	public <Value> void exportLabels(Model<Value> model, List<String> labelNames, PrismLog out, ModelExportOptions exportOptions) throws PrismException
+	public <Value> void exportLabels(Model<Value> model, List<String> labelNames, File file, ModelExportOptions exportOptions) throws PrismException
 	{
 		List<BitSet> labelStates = checkLabels(model, labelNames);
-		exportLabels(model, labelNames, labelStates, out, exportOptions);
+		exportLabels(model, labelNames, labelStates, file, exportOptions);
 	}
 
 	/**
@@ -1701,12 +2120,12 @@ public class StateModelChecker extends PrismComponent
 	 * @param model The model
 	 * @param labelNames The names of the labels to export
 	 * @param labelStates The states that satisfy each label, specified as a BitSet
-	 * @param out Where to export
+	 * @param file File to export to (if null, print to the log instead)
 	 * @param format The format in which to export
 	 */
-	public <Value> void exportLabels(Model<Value> model, List<String> labelNames, List<BitSet> labelStates, PrismLog out, ModelExportOptions.ModelExportFormat format) throws PrismException
+	public <Value> void exportLabels(Model<Value> model, List<String> labelNames, List<BitSet> labelStates, File file, ModelExportFormat format) throws PrismException
 	{
-		exportLabels(model, labelNames, labelStates, out, new ModelExportOptions(format));
+		exportLabels(model, labelNames, labelStates, file, new ModelExportOptions(format));
 	}
 
 	/**
@@ -1714,19 +2133,22 @@ public class StateModelChecker extends PrismComponent
 	 * @param model The model
 	 * @param labelNames The names of the labels to export
 	 * @param labelStates The states that satisfy each label, specified as a BitSet
-	 * @param out Where to export
+	 * @param file File to export to (if null, print to the log instead)
 	 * @param exportOptions The options for export
 	 */
-	public <Value> void exportLabels(Model<Value> model, List<String> labelNames, List<BitSet> labelStates, PrismLog out, ModelExportOptions exportOptions) throws PrismException
+	public <Value> void exportLabels(Model<Value> model, List<String> labelNames, List<BitSet> labelStates, File file, ModelExportOptions exportOptions) throws PrismException
 	{
-		switch (exportOptions.getFormat()) {
-			case EXPLICIT:
-				new PrismExplicitExporter<Value>(exportOptions).exportLabels(model, labelNames, labelStates, out);
-				break;
-			case MATLAB:
-				new MatlabExporter<Value>(exportOptions).exportLabels(model, labelNames, labelStates, out);
-				break;
+		try (PrismLog out = getPrismLogForFile(file)) {
+			switch (exportOptions.getFormat()) {
+				case EXPLICIT:
+					new PrismExplicitExporter<Value>(exportOptions).exportLabels(model, labelNames, labelStates, out);
+					break;
+				case MATLAB:
+					new MatlabExporter<Value>(exportOptions).exportLabels(model, labelNames, labelStates, out);
+					break;
+			}
 		}
+		ModelExportZipper.zipIfRequested(file, exportOptions);
 	}
 
 	/**
@@ -1742,13 +2164,13 @@ public class StateModelChecker extends PrismComponent
 		if (getExportProductStates()) {
 			mainLog.println("\nExporting product state space to file \"" + getExportProductStatesFilename() + "\"...");
 			PrismFileLog out = new PrismFileLog(getExportProductStatesFilename());
-			VarList newVarList = (VarList) modulesFile.createVarList().clone();
+			VarList newVarList = (VarList) getVarList(product.getOriginalModel()).clone();
 			String daVar = "_da";
 			while (newVarList.exists(daVar)) {
 				daVar = "_" + daVar;
 			}
 			newVarList.addVarAtStart(new Declaration(daVar, new DeclarationIntUnbounded()), 1);
-			product.getProductModel().exportStates(Prism.EXPORT_PLAIN, newVarList, out);
+			product.getProductModel().exportStates(newVarList, out, new ModelExportOptions());
 			out.close();
 		}
 	}

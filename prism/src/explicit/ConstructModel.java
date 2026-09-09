@@ -181,6 +181,7 @@ public class ConstructModel extends PrismComponent
 		SMGSimple<Value> smg = null;
 		IDTMCSimple<Value> idtmc = null;
 		IMDPSimple<Value> imdp = null;
+		IPOMDPSimple<Value> ipomdp = null;
 		LTSSimple<Value> lts = null;
 		Distribution<Value> distr = null;
 		Distribution<Interval<Value>> distrUnc = null;
@@ -238,8 +239,7 @@ public class ConstructModel extends PrismComponent
 				break;
 			case CSG:
 				modelSimple = csg = new CSGSimple<>();
-				csg.setActions(modelGen.getActions());
-				break;			
+				break;
 			case MDP:
 				modelSimple = mdp = new MDPSimple<>();
 				break;
@@ -254,6 +254,9 @@ public class ConstructModel extends PrismComponent
 				break;
 			case IMDP:
 				modelSimple = imdp = new IMDPSimple<>();
+				break;
+			case IPOMDP:
+				modelSimple = ipomdp = new IPOMDPSimple<>();
 				break;
 			case LTS:
 				modelSimple = lts = new LTSSimple<>();
@@ -273,12 +276,16 @@ public class ConstructModel extends PrismComponent
 				((PlayerInfoOwner) modelSimple).setPlayerNames(playerNames);
 			}
 			// Attach evaluator and variable info
-			if (!modelType.uncertain()) {
-				((ModelExplicit<Value>) modelSimple).setEvaluator(modelGen.getEvaluator());
-			} else {
-				((ModelExplicit<Interval<Value>>) modelSimple).setEvaluator(modelGen.getIntervalEvaluator());
+			((ModelExplicit<Value>) modelSimple).setEvaluator(modelGen.getEvaluator());
+			if (modelSimple instanceof IntervalModelExplicit) {
+				((IntervalModelExplicit<Value>) modelSimple).setIntervalEvaluator(modelGen.getIntervalEvaluator());
 			}
 	        ((ModelExplicit<Value>) modelSimple).setVarList(varList);
+			// Attach actions, if provided
+			List<Object> actions = modelGen.getActions();
+			if (actions != null) {
+				((ModelExplicit<Value>) modelSimple).setActions(actions);
+			}
 		}
 
 		// Initialise states storage
@@ -373,6 +380,7 @@ public class ConstructModel extends PrismComponent
 							distr.add(dest, modelGen.getTransitionProbability(i, j));
 							break;
 						case IMDP:
+						case IPOMDP:
 							distrUnc.add(dest, modelGen.getTransitionProbabilityInterval(i, j));
 							break;
 						case LTS:
@@ -431,19 +439,27 @@ public class ConstructModel extends PrismComponent
 						} else {
 							ch = imdp.addChoice(src, distrUnc);
 						}
+					} else if (modelType == ModelType.IPOMDP) {
+						if (distinguishActions) {
+							ch = ipomdp.addActionLabelledChoice(src, distrUnc, modelGen.getChoiceAction(i));
+						} else {
+							ch = ipomdp.addChoice(src, distrUnc);
+						}
 					}
 				}
 				// For interval models, we delimit the constructed distributions
 				if (modelType == ModelType.IDTMC) {
-					((IDTMCSimple<Value>) idtmc).delimit(src, modelGen.getEvaluator());
+					idtmc.delimit(src);
 				} else if (modelType == ModelType.IMDP) {
-					((IMDPSimple<Value>) imdp).delimit(src, ch, modelGen.getEvaluator());
+					imdp.delimit(src, ch);
+				} else if (modelType == ModelType.IPOMDP) {
+					ipomdp.delimit(src, ch);
 				}
 			}
 			// For partially observable models, add observation info to state
 			// (do it after transitions are added, since observation actions are checked)
-			if (!justReach && modelType == ModelType.POMDP) {
-				setStateObservation(modelGen, (POMDPSimple<Value>) modelSimple, src, state);
+			if (!justReach && (modelType == ModelType.POMDP || modelType == ModelType.IPOMDP)) {
+				setStateObservation(modelGen, (PartiallyObservableModel<Value>) modelSimple, src, state);
 			}
 			// Print some progress info occasionally
 			progress.updateIfReady(src + 1);
@@ -457,7 +473,12 @@ public class ConstructModel extends PrismComponent
 		mainLog.print("Reachable states exploration" + (justReach ? "" : " and model construction"));
 		mainLog.println(" done in " + ((System.currentTimeMillis() - timer) / 1000.0) + " secs.");
 		//mainLog.println(states);
-		
+
+		// Add idle actions (concurrent games)
+		if (!justReach && modelType == ModelType.CSG) {
+			csg.addIdleIndexes();
+		}
+
 		// Find/fix deadlocks (if required)
 		if (!justReach && findDeadlocks) {
 			if (modelType != ModelType.CSG) {
@@ -528,10 +549,13 @@ public class ConstructModel extends PrismComponent
 				model = sortStates ? new SMGSimple<>(smg, permut) : smg;
 				break;
 			case IDTMC:
-				model = (ModelExplicit<Value>) (sortStates ? new IDTMCSimple<>(idtmc, permut) : idtmc);
+				model = sortStates ? new IDTMCSimple<>(idtmc, permut) : idtmc;
 				break;
 			case IMDP:
-				model = (ModelExplicit<Value>) (sortStates ? new IMDPSimple<>(imdp, permut) : imdp);
+				model = sortStates ? new IMDPSimple<>(imdp, permut) : imdp;
+				break;
+			case IPOMDP:
+				model = sortStates ? new IPOMDPSimple<>(ipomdp, permut) : ipomdp;
 				break;
 			case LTS:
 				model = sortStates ? new LTSSimple<>(lts, permut) : lts;
@@ -544,10 +568,6 @@ public class ConstructModel extends PrismComponent
 			model.setConstantValues(new Values(modelGen.getConstantValues()));
 		}
 
-		// Add idle actions
-		if (modelType == ModelType.CSG) 
-			csg.addIdleIndexes();
-		
 		// Discard permutation
 		permut = null;
 
@@ -557,7 +577,7 @@ public class ConstructModel extends PrismComponent
 		return model;
 	}
 
-	private <Value> void setStateObservation(ModelGenerator<Value> modelGen, POMDPSimple<Value> pomdp, int s, State state) throws PrismException
+	private <Value> void setStateObservation(ModelGenerator<Value> modelGen, PartiallyObservableModel<Value> pomdp, int s, State state) throws PrismException
 	{
 		// Get observation for the current state
 		// An observation is a State containing the value for each observable

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # The prism-auto script automatically executes PRISM on one or more
 # models/properties, for the purposes of benchmarking or testing.
@@ -67,7 +67,7 @@ alreadyRan = set()
 # returns true if we are running on Windows
 def isWindows():
     s = platform.system()
-    return s == 'Windows' or re.match('CYGWIN', s) != None
+    return s == 'Windows' or re.match(r'CYGWIN', s) != None
 
 # compare two files (with filenames f1,f2) for equality
 def compareFiles(f1,f2):
@@ -87,22 +87,22 @@ def sortedListDir(dir):
     return list
 
 def isPrismModelFile(file):
-    return re.match('.+(\.prism|\.nm|\.pm|\.sm)$', file)
+    return re.match(r'.+(\.prism|\.nm|\.pm|\.sm)$', file)
 
 def isPrismPropertiesFile(file):
-    return re.match('.+(\.props|\.pctl|\.csl)$', file)
+    return re.match(r'.+(\.props|\.pctl|\.csl)$', file)
 
 def isPrismModelListFile(file):
-    return re.match('models$', os.path.basename(file))
+    return re.match(r'models$', os.path.basename(file))
 
 def isPrismPropListFile(file):
-    return re.match('.+(\.txt)$', file)
+    return re.match(r'.+(\.txt)$', file)
 
 def isOutFile(file):
-    return re.match('.+(\.out\.)', file) # Note that this matches anything that contains a .out anywhere in the name
+    return re.match(r'.+(\.out\.)', file) # Note that this matches anything that contains a .out anywhere in the name
 
 def isAutoFile(file):
-    return re.match('.+(\.auto)$', file)
+    return re.match(r'.+(\.auto)$', file)
 
 # Check whether the given (args|auto) file doesn't have an associated model
 
@@ -442,22 +442,22 @@ def createLogFileName(args, dir=""):
     logFile = '.'.join(args)
     if len(dir) > 0:
         logFile = re.sub(dir+'/', '', logFile)
-    logFile = re.sub('/', '_', logFile)
-    logFile = re.sub('[^a-zA-Z0-9=_, \.]', '', logFile)
-    logFile = re.sub('[ ]+', '.', logFile)
-    logFile = re.sub('[\.]+', '.', logFile)
-    logFile = re.sub('^[\._]+', '', logFile)
+    logFile = re.sub(r'/', '_', logFile)
+    logFile = re.sub(r'[^a-zA-Z0-9=_, \.]', '', logFile)
+    logFile = re.sub(r'[ ]+', '.', logFile)
+    logFile = re.sub(r'[\.]+', '.', logFile)
+    logFile = re.sub(r'^[\._]+', '', logFile)
     return logFile + ".log"
 
 # Create a valid name for a log (sub) directory based on a list of benchmark arguments
 
 def createLogDirName(args):
     logDir = '.'.join(args)
-    logDir = re.sub('/', '_', logDir)
-    logDir = re.sub('[^a-zA-Z0-9=_, \.]', '', logDir)
-    logDir = re.sub('[ ]+', '.', logDir)
-    logDir = re.sub('[\.]+', '.', logDir)
-    logDir = re.sub('^[\._]+', '', logDir)
+    logDir = re.sub(r'/', '_', logDir)
+    logDir = re.sub(r'[^a-zA-Z0-9=_, \.]', '', logDir)
+    logDir = re.sub(r'[ ]+', '.', logDir)
+    logDir = re.sub(r'[\.]+', '.', logDir)
+    logDir = re.sub(r'^[\._]+', '', logDir)
     return logDir
 
 # Walk a directory and execute a callback on each file
@@ -589,6 +589,8 @@ def runPrism(args, bmArgs, dir=""):
 
     # keep track if we need to cleanup the log file after use
     cleanupLogFile = False
+    # if we are using a shared single log, we only scan lines from this offset
+    logReadFrom = 0
     if options.test:
         if options.testAll: args.append("-testall")
         else: args.append("-test")
@@ -642,21 +644,35 @@ def runPrism(args, bmArgs, dir=""):
             f.close()
         # we want cleanup when we are done, as this is a real temporary file
         cleanupLogFile = True
-        prismArgsExec = prismArgs + ['-mainlog', logFile]
+        if options.singleLog:
+            if os.path.exists(options.singleLog):
+                logReadFrom = os.path.getsize(options.singleLog)
+            prismArgsExec = prismArgs + ['-mainlog', options.singleLog + ':append']
+            # read test/error output from this shared file
+            logFile = options.singleLog
+            # single log is user-managed, not temporary
+            cleanupLogFile = False
+        else:
+            prismArgsExec = prismArgs + ['-mainlog', logFile]
         exitCode = execute(prismArgsExec)
     else:
         exitCode = execute(prismArgs)
+    runLogLines = []
+    if (options.test or options.ddWarnings) and 'logFile' in locals():
+        with open(logFile, 'r') as f:
+            f.seek(logReadFrom)
+            runLogLines = f.readlines()
     # Extract DD reference count warnings
     if options.ddWarnings:
-        for line in open(logFile, 'r').readlines():
-            if re.match('Warning: CUDD reports .* non-zero references', line):
+        for line in runLogLines:
+            if re.match(r'Warning: CUDD reports .* non-zero references', line):
                 printTestResult(line, prismArgs)
     # Extract test results if needed
     if options.test:
-        for line in open(logFile, 'r').readlines():
-            if re.match('Testing result:', line):
+        for line in runLogLines:
+            if re.match(r'Testing result:', line):
                 printTestResult(line, prismArgs)
-            elif re.match('Warning:', line):
+            elif re.match(r'Warning:', line):
                 if options.showWarnings or options.verboseTest:
                     printTestResult(line, prismArgs)
                 else:
@@ -665,7 +681,7 @@ def runPrism(args, bmArgs, dir=""):
             elif options.verboseTest:
                 # in verbose mode, also print the non-matching lines
                 # rstrip to remove newline before printing
-                if re.match('Error:', line):
+                if re.match(r'Error:', line):
                     # highlight lines with error messages
                     printColoured('FAILURE', line.rstrip())
                 else:
@@ -677,12 +693,12 @@ def runPrism(args, bmArgs, dir=""):
             # we don't want to cleanup the log (if it was a temporary file)
             # so that the user can inspect it
             cleanupLogFile = False
-            for line in open(logFile, 'r').readlines():
-                if re.match('Error:', line):
+            for line in runLogLines:
+                if re.match(r'Error:', line):
                     printTestResult(line, prismArgs)
             if (options.printFailures):
                 print("Failing test log file:")
-                for line in open(logFile, 'r').readlines():
+                for line in runLogLines:
                     print(line, end="")
             else:
                 print("To see log file, run:")
@@ -802,7 +818,7 @@ def countTestResult(msg):
         if 'did not converge' in msg:
             incrementTestStat('FAIL_NONCONVERGE')
         incrementTestStat('FAILURE')
-    elif options.ddWarnings and re.match('Warning: CUDD reports .* non-zero references', msg):
+    elif options.ddWarnings and re.match(r'Warning: CUDD reports .* non-zero references', msg):
         incrementTestStat('WARNING')
         incrementTestStat('DDWARNING')
     elif 'Warning:' in msg:
@@ -1150,6 +1166,8 @@ def closeDown(exitCode):
 signal.signal(signal.SIGINT, signal_handler)
 parser = OptionParser(usage="usage: %prog [options] args")
 parser.add_option("-l", "--log", dest="logDir", metavar="DIR", default="", help="Store PRISM output in logs in DIR")
+parser.add_option("--log-subdirs", action="store_true", dest="logSubdirs" ,default=False, help="Organise PRISM output logs in subdirectories per benchmark argument")
+parser.add_option("--single-log", dest="singleLog", metavar="FILE", default=None, help="Store PRISM output for all runs in a single file FILE")
 parser.add_option("-a", "--args", dest="bmFile", metavar="FILE", default="", help="Read argument lists for benchmarking from FILE")
 parser.add_option("--args-list", dest="bmList", metavar="X", default="", help="Use X as argument lists for benchmarking (comma-separated)")
 parser.add_option("-e", "--echo", action="store_true", dest="echo", default=False, help="Just print out tasks, don't execute")
@@ -1171,7 +1189,6 @@ parser.add_option("--echo-full", action="store_true", dest="echoFull", default=F
 parser.add_option("--models-filename", dest="modelsFilename", metavar="X", default="models", help="Read in list of models/parameters for a directory from file X, if present [default=models]")
 parser.add_option("--models-info", dest="modelsInfoFilename", metavar="X", default="models.csv", help="Read model details from CSV file X, if present [default=models.csv]")
 parser.add_option("--filter-models", dest="filterModels", metavar="N", default="", help="Filter benchmark models...")
-parser.add_option("--log-subdirs", action="store_true", dest="logSubdirs" ,default=False, help="Organise PRISM output logs in subdirectories per benchmark argument")
 parser.add_option("--no-export-tests", action="store_true", dest="noExportTests", default=False, help="Don't check exported files when in test mode")
 parser.add_option("--skip-export-runs", action="store_true", dest="skipExportRuns", default=False, help="Skip all runs having exports")
 parser.add_option("--skip-duplicate-runs", action="store_true", dest="skipDuplicates", default=False, help="Skip PRISM runs which have the same arguments as an earlier run (with some heuristics to detect equivalent arguments)")
@@ -1204,6 +1221,12 @@ if options.timeout:
     except ValueError:
         print('Illegal parameter value for timeout parameter')
         sys.exit(1)
+if options.singleLog:
+    singleLogDir = os.path.dirname(options.singleLog)
+    if singleLogDir:
+        os.makedirs(singleLogDir, exist_ok=True)
+    # start a fresh single log for this prism-auto run
+    open(options.singleLog, 'w').close()
 # if options.logDir and not os.path.isdir(options.logDir):
 #     print("Log directory \"" + options.logDir + "\" does not exist")
 #     sys.exit(1)

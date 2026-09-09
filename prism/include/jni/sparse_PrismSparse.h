@@ -9,54 +9,6 @@ extern "C" {
 #endif
 /*
  * Class:     sparse_PrismSparse
- * Method:    PS_FreeGlobalRefs
- * Signature: ()V
- */
-JNIEXPORT void JNICALL Java_sparse_PrismSparse_PS_1FreeGlobalRefs
-  (JNIEnv *, jclass);
-
-/*
- * Class:     sparse_PrismSparse
- * Method:    PS_SetCUDDManager
- * Signature: (J)V
- */
-JNIEXPORT void JNICALL Java_sparse_PrismSparse_PS_1SetCUDDManager
-  (JNIEnv *, jclass, jlong);
-
-/*
- * Class:     sparse_PrismSparse
- * Method:    PS_SetMainLog
- * Signature: (Lprism/PrismLog;)V
- */
-JNIEXPORT void JNICALL Java_sparse_PrismSparse_PS_1SetMainLog
-  (JNIEnv *, jclass, jobject);
-
-/*
- * Class:     sparse_PrismSparse
- * Method:    PS_SetTechLog
- * Signature: (Lprism/PrismLog;)V
- */
-JNIEXPORT void JNICALL Java_sparse_PrismSparse_PS_1SetTechLog
-  (JNIEnv *, jclass, jobject);
-
-/*
- * Class:     sparse_PrismSparse
- * Method:    PS_SetExportIterations
- * Signature: (Z)V
- */
-JNIEXPORT void JNICALL Java_sparse_PrismSparse_PS_1SetExportIterations
-  (JNIEnv *, jclass, jboolean);
-
-/*
- * Class:     sparse_PrismSparse
- * Method:    PS_GetErrorMessage
- * Signature: ()Ljava/lang/String;
- */
-JNIEXPORT jstring JNICALL Java_sparse_PrismSparse_PS_1GetErrorMessage
-  (JNIEnv *, jclass);
-
-/*
- * Class:     sparse_PrismSparse
  * Method:    PS_ProbBoundedUntil
  * Signature: (JJJIJIJJI)J
  */
@@ -258,26 +210,34 @@ JNIEXPORT jlong JNICALL Java_sparse_PrismSparse_PS_1StochTransient
 /*
  * Class:     sparse_PrismSparse
  * Method:    PS_ExportMatrix
- * Signature: (JLjava/lang/String;JIJIJILjava/lang/String;Ljava/lang/String;Z)I
+ * Signature: (JLjava/lang/String;JIJIJILjava/lang/String;ZLjava/lang/String;)I
  */
 JNIEXPORT jint JNICALL Java_sparse_PrismSparse_PS_1ExportMatrix
-  (JNIEnv *, jclass, jlong, jstring, jlong, jint, jlong, jint, jlong, jint, jstring, jstring, jboolean);
+  (JNIEnv *, jclass, jlong, jstring, jlong, jint, jlong, jint, jlong, jint, jstring, jboolean, jstring);
+
+/*
+ * Class:     sparse_PrismSparse
+ * Method:    PS_ExportMC
+ * Signature: ([JLjava/util/List;Ljava/lang/String;JIJIJILjava/lang/String;ZLjava/lang/String;)I
+ */
+JNIEXPORT jint JNICALL Java_sparse_PrismSparse_PS_1ExportMC
+  (JNIEnv *, jclass, jlongArray, jobject, jstring, jlong, jint, jlong, jint, jlong, jint, jstring, jboolean, jstring);
 
 /*
  * Class:     sparse_PrismSparse
  * Method:    PS_ExportMDP
- * Signature: (JJLjava/util/List;Ljava/lang/String;JIJIJIJILjava/lang/String;)I
+ * Signature: (JJLjava/util/List;Ljava/lang/String;JIJIJIJILjava/lang/String;ZLjava/lang/String;)I
  */
 JNIEXPORT jint JNICALL Java_sparse_PrismSparse_PS_1ExportMDP
-  (JNIEnv *, jclass, jlong, jlong, jobject, jstring, jlong, jint, jlong, jint, jlong, jint, jlong, jint, jstring);
+  (JNIEnv *, jclass, jlong, jlong, jobject, jstring, jlong, jint, jlong, jint, jlong, jint, jlong, jint, jstring, jboolean, jstring);
 
 /*
  * Class:     sparse_PrismSparse
  * Method:    PS_ExportSubMDP
- * Signature: (JJLjava/lang/String;JIJIJIJILjava/lang/String;Ljava/lang/String;Z)I
+ * Signature: (JJLjava/lang/String;JIJIJIJILjava/lang/String;ZLjava/lang/String;)I
  */
 JNIEXPORT jint JNICALL Java_sparse_PrismSparse_PS_1ExportSubMDP
-  (JNIEnv *, jclass, jlong, jlong, jstring, jlong, jint, jlong, jint, jlong, jint, jlong, jint, jstring, jstring, jboolean);
+  (JNIEnv *, jclass, jlong, jlong, jstring, jlong, jint, jlong, jint, jlong, jint, jlong, jint, jstring, jboolean, jstring);
 
 /*
  * Class:     sparse_PrismSparse

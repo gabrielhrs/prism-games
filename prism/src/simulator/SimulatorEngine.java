@@ -42,19 +42,7 @@ import parser.ast.ExpressionTemporal;
 import parser.ast.LabelList;
 import parser.ast.PropertiesFile;
 import parser.type.Type;
-import prism.ModelGenerator;
-import prism.ModelType;
-import prism.PrismComponent;
-import prism.PrismException;
-import prism.PrismFileLog;
-import prism.PrismLangException;
-import prism.PrismLog;
-import prism.PrismNotSupportedException;
-import prism.PrismUtils;
-import prism.Result;
-import prism.ResultsCollection;
-import prism.RewardGenerator;
-import prism.UndefinedConstants;
+import prism.*;
 import simulator.method.SimulationMethod;
 import simulator.sampler.Sampler;
 import strat.Strategy;
@@ -969,8 +957,8 @@ public class SimulatorEngine extends PrismComponent
 		}
 		// Get probability and action for transition
 		Object p = modelGen.getTransitionProbabilityObject(i, offset);
-		Object action = modelGen.getChoiceAction(i);
-		String actionString = modelGen.getChoiceActionString(i);
+		Object action = modelGen.getTransitionAction(i, offset);
+		String actionString = modelGen.getTransitionActionDescription(i, offset);
 		// Compute its transition rewards
 		calculateTransitionRewards(path.getCurrentState(), action, tmpTransitionRewards);
 		// Compute next state
@@ -1009,8 +997,8 @@ public class SimulatorEngine extends PrismComponent
 		}
 		// Get probability and action for transition
 		Object p = modelGen.getTransitionProbabilityObject(i, offset);
-		Object action = modelGen.getChoiceAction(i);
-		String actionString = modelGen.getChoiceActionString(i);
+		Object action = modelGen.getTransitionAction(i, offset);
+		String actionString = modelGen.getTransitionActionDescription(i, offset);
 		// Compute its transition rewards
 		calculateTransitionRewards(path.getCurrentState(), action, tmpTransitionRewards);
 		// Compute next state
@@ -1233,7 +1221,7 @@ public class SimulatorEngine extends PrismComponent
 	}
 
 	/**
-	 * Get a string describing the action of a transition, specified by its index/offset.
+	 * Get a string representation of the action of a transition, specified by its index/offset.
 	 * Usually, this is for the current (final) state of the path but, if you called {@link #computeTransitionsForStep(int step)}, it will be for this state instead.
 	 */
 	public String getTransitionActionString(int i, int offset) throws PrismException
@@ -1242,7 +1230,16 @@ public class SimulatorEngine extends PrismComponent
 	}
 
 	/**
-	 * Get a string describing the action of a transition, specified by its index.
+	 * Get a string describing the action of a transition, specified by its index/offset.
+	 * Usually, this is for the current (final) state of the path but, if you called {@link #computeTransitionsForStep(int step)}, it will be for this state instead.
+	 */
+	public String getTransitionActionDescription(int i, int offset) throws PrismException
+	{
+		return modelGen.getTransitionActionDescription(i, offset);
+	}
+
+	/**
+	 * Get a string representation of the action of a transition, specified by its index.
 	 * Usually, this is for the current (final) state of the path but, if you called {@link #computeTransitionsForStep(int step)}, it will be for this state instead.
 	 */
 	public String getTransitionActionString(int index) throws PrismException
@@ -1250,6 +1247,17 @@ public class SimulatorEngine extends PrismComponent
 		int i = modelGen.getChoiceIndexOfTransition(index);
 		int offset = modelGen.getChoiceOffsetOfTransition(index);
 		return getTransitionActionString(i, offset);
+	}
+
+	/**
+	 * Get a string describing the action of a transition, specified by its index.
+	 * Usually, this is for the current (final) state of the path but, if you called {@link #computeTransitionsForStep(int step)}, it will be for this state instead.
+	 */
+	public String getTransitionActionDescription(int index) throws PrismException
+	{
+		int i = modelGen.getChoiceIndexOfTransition(index);
+		int offset = modelGen.getChoiceOffsetOfTransition(index);
+		return getTransitionActionDescription(i, offset);
 	}
 
 	/**
@@ -1683,27 +1691,12 @@ public class SimulatorEngine extends PrismComponent
 	 */
 	public void exportPath(File file, boolean timeCumul, boolean showRewards, String colSep, ArrayList<Integer> vars) throws PrismException
 	{
-		PrismLog log = null;
-		try {
-			if (path == null)
-				throw new PrismException("There is no path to export");
-			// create new file log or use main log
-			if (file != null) {
-				log = new PrismFileLog(file.getPath());
-				if (!log.ready()) {
-					throw new PrismException("Could not open file \"" + file + "\" for output");
-				}
-				mainLog.println("\nExporting path to file \"" + file + "\"...");
-			} else {
-				log = mainLog;
-				log.println();
-			}
+		if (path == null) {
+			throw new PrismException("There is no path to export");
+		}
+		try (PrismLog log = getPrismLogForFile(file)) {
+			mainLog.println("\nExporting path " + getDestinationStringForFile(file));
 			((PathFull) path).exportToLog(log, timeCumul, showRewards, colSep, vars);
-			if (file != null)
-				log.close();
-		} finally {
-			if (file != null && log != null)
-				log.close();
 		}
 	}
 
@@ -2029,8 +2022,10 @@ public class SimulatorEngine extends PrismComponent
 		int iters;
 		long i;
 		// Flags
+		boolean fixdl = getSettings().getBoolean(PrismSettings.PRISM_FIX_DEADLOCKS);
 		boolean stoppedEarly = false;
 		boolean deadlocksFound = false;
+		State deadlockState = null;
 		boolean allDone = false;
 		boolean allKnown = false;
 		boolean someUnknownButBounded = false;
@@ -2081,6 +2076,7 @@ public class SimulatorEngine extends PrismComponent
 
 			// Generate a path
 			allKnown = false;
+			deadlocksFound = false;
 			someUnknownButBounded = false;
 			i = 0;
 			while ((!allKnown && i < maxPathLength) || someUnknownButBounded) {
@@ -2094,16 +2090,22 @@ public class SimulatorEngine extends PrismComponent
 							someUnknownButBounded = true;
 					}
 				}
+				// If we found a deadlock (and they are not being fixed) stop
+				if (!fixdl && modelGen.isDeadlock()) {
+					deadlocksFound = true;
+					deadlockState = new State(path.getCurrentState());
+					shouldStopSampling = true;
+					break;
+				}
 				// Stop when all answers are known or we have reached max path length
 				// (but don't stop yet if there are "bounded" samplers with unkown values)
 				if ((allKnown || i >= maxPathLength) && !someUnknownButBounded)
 					break;
 				// Make a random transition
+				// (ignore return value; need to check deadlocks separately above)
 				automaticTransition();
 				i++;
 			}
-
-			// TODO: Detect deadlocks so we can report a warning
 
 			// Update path length statistics
 			avgPathLength = (avgPathLength * (iters - 1) + (i)) / iters;
@@ -2137,9 +2139,11 @@ public class SimulatorEngine extends PrismComponent
 			mainLog.print(" ...\n\nSampling terminated early after " + iters + " iterations.\n");
 		}
 
-		// Print a warning if deadlocks occurred at any point
-		if (deadlocksFound)
-			mainLog.printWarning("Deadlocks were found during simulation: self-loops were added.");
+		// If we found a deadlock (and they are not being fixed) report error
+		if (deadlocksFound) {
+			mainLog.println("\nDeadlock found in state " + deadlockState);
+			throw new PrismException("Deadlock state found");
+		}
 
 		// Print a warning if simulation was stopped by the user
 		if (shouldStopSampling)

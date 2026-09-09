@@ -31,11 +31,12 @@ import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.List;
 
-import common.Interval;
 import io.ExplicitModelImporter;
+import parser.EvaluateContext;
 import parser.State;
 import prism.Evaluator;
 import prism.ModelInfo;
+import prism.PlayerInfoOwner;
 import prism.PrismComponent;
 import prism.PrismException;
 import prism.PrismNotSupportedException;
@@ -95,6 +96,12 @@ public class ExplicitFiles2Model extends PrismComponent
 	 */
 	public <Value> Model<Value> build(ExplicitModelImporter modelImporter, Evaluator<Value> eval) throws PrismException
 	{
+		// Check model is defined as doubles
+		if (modelImporter.modelIsExact() && !eval.exact()) {
+			throw new PrismException("Cannot import an exact model unless in exact mode");
+		}
+
+		modelImporter.setFixDeadlocks(fixdl);
 		ModelExplicit<Value> model = null;
 		ModelInfo modelInfo = modelImporter.getModelInfo();
 		boolean isDbl = eval.one() instanceof Double;
@@ -111,6 +118,10 @@ public class ExplicitFiles2Model extends PrismComponent
 			MDP<Value> mdp = isDbl ? (MDP<Value>) new MDPSparse() : new MDPSimple<>();
 			model = (ModelExplicit<Value>) mdp;
 			break;
+		case POMDP:
+			POMDP<Value> pomdp = new POMDPSimple<>();
+			model = (ModelExplicit<Value>) pomdp;
+			break;
 		case IDTMC:
 			IDTMCSimple<Value> idtmc = new IDTMCSimple<>();
 			model = (ModelExplicit<Value>) idtmc;
@@ -119,13 +130,20 @@ public class ExplicitFiles2Model extends PrismComponent
 			IMDPSimple<Value> imdp = new IMDPSimple<>();
 			model = (ModelExplicit<Value>) imdp;
 			break;
+		case SMG:
+			SMGSimple<Value> smg = new SMGSimple<>();
+			model = smg;
+			break;
+		case IPOMDP:
+			IPOMDPSimple<Value> ipomdp = new IPOMDPSimple<>();
+			model = (ModelExplicit<Value>) ipomdp;
+			break;
 		case LTS:
 			LTS<Value> lts = new LTSSimple<>();
 			model = (ModelExplicit<Value>) lts;
 			break;
 		case CTMDP:
 		case PTA:
-		case SMG:
 		case STPG:
 			throw new PrismNotSupportedException("Currently, importing " + modelInfo.getModelType() + " is not supported");
 		}
@@ -133,12 +151,17 @@ public class ExplicitFiles2Model extends PrismComponent
 			throw new PrismException("Could not import " + modelInfo.getModelType());
 		}
 		model.setEvaluator(eval);
-		if (!model.getModelType().uncertain()) {
-			model.setEvaluator(eval);
-		} else {
-			((ModelExplicit<Interval<Value>>) model).setEvaluator(eval.createIntervalEvaluator());
+		if (model instanceof IntervalModelExplicit) {
+			((IntervalModelExplicit<Value>) model).setIntervalEvaluator(eval.createIntervalEvaluator());
+		}
+		List<Object> actions = modelInfo.getActions();
+		if (actions != null) {
+			model.setActions(actions);
 		}
 		model.buildFromExplicitImport(modelImporter);
+		if (model.getModelType().multiplePlayers()) {
+			((PlayerInfoOwner) model).setPlayerNames(modelInfo.getPlayerNames());
+		}
 
 		if (model.getNumStates() == 0) {
 			throw new PrismNotSupportedException("Imported model has no states, not supported");
@@ -148,10 +171,15 @@ public class ExplicitFiles2Model extends PrismComponent
 		if (!model.getInitialStates().iterator().hasNext()) {
 			throw new PrismException("Imported model has no initial states");
 		}
-
-		model.findDeadlocks(fixdl);
+		BitSet deadlocks = modelImporter.getDeadlockStates();
+		for (int s = deadlocks.nextSetBit(0); s >= 0; s = deadlocks.nextSetBit(s + 1)) {
+			model.addDeadlockState(s);
+		}
 
 		loadStates(modelImporter, model);
+		if (model.getModelType().partiallyObservable()) {
+			loadObservationDefinitions(modelImporter, (PartiallyObservableModel<Value>) model);
+		}
 
 		return model;
 	}
@@ -171,7 +199,7 @@ public class ExplicitFiles2Model extends PrismComponent
 			labelBitSets.add(new BitSet());
 		}
 		// Extract info
-		modelImporter.extractLabelsAndInitialStates((s, l) -> labelBitSets.get(l).set(s), model::addInitialState);
+		modelImporter.extractLabelsAndInitialStates((s, l) -> labelBitSets.get(l).set(s), model::addInitialState, model::addDeadlockState);
 		// Attach labels to model
 		for (int l = 0; l < numLabels; l++) {
 			model.addLabel(modelInfo.getLabelName(l), labelBitSets.get(l));
@@ -186,10 +214,36 @@ public class ExplicitFiles2Model extends PrismComponent
 		int numStates = model.getNumStates();
 		int numVars = modelImporter.getModelInfo().getNumVars();
 		List<State> statesList = new ArrayList<>(numStates);
+		ModelInfo modelInfo = modelImporter.getModelInfo();
+		EvaluateContext.EvalMode evalMode = model.getEvaluator().evalMode();
 		for (int i = 0; i < numStates; i++) {
 			statesList.add(new State(numVars));
 		}
-		modelImporter.extractStates((s, i, o) -> statesList.get(s).setValue(i, o));
+		modelImporter.extractStates(
+				(s, i, v) -> statesList.get(s).setValue(i, modelInfo.getVarType(i).castValueTo(v, evalMode))
+		);
 		model.setStatesList(statesList);
+		model.setVarList(modelInfo.createVarList());
+	}
+
+	/**
+	 * Load the observation information, and store in model
+	 */
+	private void loadObservationDefinitions(ExplicitModelImporter modelImporter, PartiallyObservableModel<?> model) throws PrismException
+	{
+		int numObservations = model.getNumObservations();
+		int numObservables = modelImporter.getModelInfo().getNumObservables();
+		List<State> observationsList = new ArrayList<>(numObservations);
+		for (int i = 0; i < numObservations; i++) {
+			observationsList.add(new State(numObservables));
+		}
+		modelImporter.extractObservationDefinitions((o, i, v) -> observationsList.get(o).setValue(i, v));
+		model.setObservationsList(observationsList);
+		List<State> statesList = model.getStatesList();
+		if (statesList != null) {
+			model.setUnobservationsList(new ArrayList<>(statesList));
+		} else {
+			throw new PrismException("Can't load observation definitions without a states list");
+		}
 	}
 }

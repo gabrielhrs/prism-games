@@ -26,6 +26,7 @@
 
 package explicit;
 
+import java.io.File;
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Iterator;
@@ -47,12 +48,11 @@ import explicit.rewards.MCRewards;
 import explicit.rewards.MCRewardsFromMDPRewards;
 import explicit.rewards.MDPRewards;
 import explicit.rewards.Rewards;
-import io.ModelExportOptions;
+import io.ModelExportFormat;
 import parser.ast.Expression;
 import parser.type.TypeDouble;
 import prism.AccuracyFactory;
 import prism.OptionsIntervalIteration;
-import prism.Prism;
 import prism.PrismComponent;
 import prism.PrismDevNullLog;
 import prism.PrismException;
@@ -390,9 +390,7 @@ public class MDPModelChecker extends ProbModelChecker
 			List<BitSet> labels = Arrays.asList(bsInit, target);
 			List<String> labelNames = Arrays.asList("init", "target");
 			mainLog.println("\nExporting target states info to file \"" + getExportTargetFilename() + "\"...");
-			PrismLog out = new PrismFileLog(getExportTargetFilename());
-			exportLabels(mdp, labelNames, labels, out, ModelExportOptions.ModelExportFormat.EXPLICIT);
-			out.close();
+			exportLabels(mdp, labelNames, labels, new File(getExportTargetFilename()), ModelExportFormat.EXPLICIT);
 		}
 
 		// If required, create/initialise strategy storage
@@ -411,6 +409,11 @@ public class MDPModelChecker extends ProbModelChecker
 			no = prob0(mdp, remain, target, min, strat);
 		} else {
 			no = new BitSet();
+			if (remain != null) {
+				no.or(remain);
+				no.or(target);
+				no.flip(0, n);
+			}
 		}
 		timerProb0 = System.currentTimeMillis() - timerProb0;
 		timerProb1 = System.currentTimeMillis();
@@ -562,7 +565,7 @@ public class MDPModelChecker extends ProbModelChecker
 	 * @param min Min or max probabilities (true=min, false=max)
 	 * @param strat Storage for (memoryless) strategy choice indices (ignored if null)
 	 */
-	public BitSet prob0(MDP<?> mdp, BitSet remain, BitSet target, boolean min, int strat[])
+	public BitSet prob0(NondetModel<?> mdp, BitSet remain, BitSet target, boolean min, int strat[])
 	{
 		int n, iters;
 		BitSet u, soln, unknown;
@@ -656,7 +659,7 @@ public class MDPModelChecker extends ProbModelChecker
 	 * @param min Min or max probabilities (true=min, false=max)
 	 * @param strat Storage for (memoryless) strategy choice indices (ignored if null)
 	 */
-	public BitSet prob1(MDP<?> mdp, BitSet remain, BitSet target, boolean min, int strat[])
+	public BitSet prob1(NondetModel<?> mdp, BitSet remain, BitSet target, boolean min, int strat[])
 	{
 		int n, iters;
 		BitSet u, v, soln, unknown;
@@ -802,7 +805,7 @@ public class MDPModelChecker extends ProbModelChecker
 		mainLog.println("Starting value iteration (" + description + ")...");
 
 		ExportIterations iterationsExport = null;
-		if (settings.getBoolean(PrismSettings.PRISM_EXPORT_ITERATIONS)) {
+		if (settings != null && settings.getBoolean(PrismSettings.PRISM_EXPORT_ITERATIONS)) {
 			iterationsExport = new ExportIterations("Explicit MDP ReachProbs value iteration (" + description + ")");
 			mainLog.println("Exporting iterations to " + iterationsExport.getFileName());
 		}
@@ -1976,9 +1979,12 @@ public class MDPModelChecker extends ProbModelChecker
 			timerPre = System.currentTimeMillis();
 
 			ECComputer ecs = ECComputer.createECComputer(this, mdp);
-			ecs.computeMECStates();
 			BitSet positiveECs = new BitSet();
-			for (BitSet ec : ecs.getMECStates()) {
+			int[] mecCount = {0};
+			StopWatch mecTimer = new StopWatch(getLog());
+			mecTimer.start("MEC computation");
+			ecs.computeMECStatesStreaming(ec -> {
+				mecCount[0]++;
 				// check if this MEC is positive
 				boolean positiveEC = false;
 				for (int state : new IterableStateSet(ec, n)) {
@@ -1999,7 +2005,9 @@ public class MDPModelChecker extends ProbModelChecker
 				if (positiveEC) {
 					positiveECs.or(ec);
 				}
-			}
+				// ec is eligible for GC once this callback returns
+			});
+			mecTimer.stop("found " + mecCount[0] + " MECs");
 
 			// inf = Pmax[ <> positiveECs ] > 0
 			//     = ! (Pmax[ <> positiveECs ] = 0)
@@ -2128,9 +2136,7 @@ public class MDPModelChecker extends ProbModelChecker
 			List<BitSet> labels = Arrays.asList(bsInit, target);
 			List<String> labelNames = Arrays.asList("init", "target");
 			mainLog.println("\nExporting target states info to file \"" + getExportTargetFilename() + "\"...");
-			PrismLog out = new PrismFileLog(getExportTargetFilename());
-			exportLabels(mdp, labelNames, labels, out, ModelExportOptions.ModelExportFormat.EXPLICIT);
-			out.close();
+			exportLabels(mdp, labelNames, labels, new File(getExportTargetFilename()), ModelExportFormat.EXPLICIT);
 		}
 
 		// If required, create/initialise strategy storage
@@ -2706,9 +2712,11 @@ public class MDPModelChecker extends ProbModelChecker
 		maybe.andNot(no);
 
 		ECComputer ec = ECComputer.createECComputer(this, mdp);
-
+		StopWatch mecTimer = new StopWatch(getLog());
+		mecTimer.start("MEC computation");
 		ec.computeMECStates(maybe);
 		List<BitSet> mecs = ec.getMECStates();
+		mecTimer.stop("found " + mecs.size() + " MECs");
 		mecs.add(yes);
 		mecs.add(no);
 

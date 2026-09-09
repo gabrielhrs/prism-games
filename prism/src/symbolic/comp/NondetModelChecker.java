@@ -39,6 +39,8 @@ import java.util.BitSet;
 import java.util.List;
 import java.util.Vector;
 
+import io.ModelExportFormat;
+import io.ModelExportOptions;
 import jdd.JDD;
 import jdd.JDDNode;
 import jdd.JDDVars;
@@ -348,7 +350,9 @@ public class NondetModelChecker extends NonProbModelChecker
 		// Get rewards
 		Object rs = expr.getRewardStructIndex();
 		JDDNode stateRewards = getStateRewardsByIndexObject(rs, model, constantValues);
+		checkNegativeRewards(stateRewards, "State");
 		JDDNode transRewards = getTransitionRewardsByIndexObject(rs, model, constantValues);
+		checkNegativeRewards(transRewards, "Transition");
 
 		// Compute rewards
 		StateValues rewards = null;
@@ -575,7 +579,7 @@ public class NondetModelChecker extends NonProbModelChecker
 
 		// For LTL/multi-obj model checking routines
 		mcLtl = new LTLModelChecker(prism);
-		mcMo = new MultiObjModelChecker(prism, prism);
+		mcMo = new MultiObjModelChecker(prism);
 
 		// Product is initially just the original model (we build it recursively)
 		modelProduct = model;
@@ -796,7 +800,9 @@ public class NondetModelChecker extends NonProbModelChecker
 				throw new PrismNotSupportedException("Multi-objective model checking does not support state rewards; please convert to transition rewards");
 			}
 			// Add transition rewards to list
-			transRewardsList.add(getTransitionRewardsByIndexObject(rs, model, constantValues));
+			JDDNode transRewards = getTransitionRewardsByIndexObject(rs, model, constantValues);
+			checkNegativeRewards(transRewards, "Transition");
+			transRewardsList.add(transRewards);
 		}
 		
 		// Check that the temporal/reward operator is supported, and store step bounds if present
@@ -897,9 +903,10 @@ public class NondetModelChecker extends NonProbModelChecker
 		// Output product, if required
 		if (prism.getExportProductTrans()) {
 			try {
-				int precision = getSettings().getInteger(PrismSettings.PRISM_EXPORT_MODEL_PRECISION);
+				ModelExportOptions exportOptions = new ModelExportOptions();
+				exportOptions.setModelPrecision(getSettings().getInteger(PrismSettings.PRISM_EXPORT_MODEL_PRECISION));
 				mainLog.println("\nExporting product transition matrix to file \"" + prism.getExportProductTransFilename() + "\"...");
-				modelProduct.exportToFile(Prism.EXPORT_PLAIN, true, new File(prism.getExportProductTransFilename()), precision);
+				modelProduct.exportToFile(new File(prism.getExportProductTransFilename()), exportOptions);
 			} catch (FileNotFoundException e) {
 				mainLog.printWarning("Could not export product transition matrix to file \"" + prism.getExportProductTransFilename() + "\"");
 			}
@@ -907,7 +914,7 @@ public class NondetModelChecker extends NonProbModelChecker
 		if (prism.getExportProductStates()) {
 			mainLog.println("\nExporting product state space to file \"" + prism.getExportProductStatesFilename() + "\"...");
 			PrismFileLog out = new PrismFileLog(prism.getExportProductStatesFilename());
-			modelProduct.exportStates(Prism.EXPORT_PLAIN, out);
+			modelProduct.exportStates(out, new ModelExportOptions());
 			out.close();
 		}
 	}
@@ -930,8 +937,7 @@ public class NondetModelChecker extends NonProbModelChecker
 		// and whether we want to use the corresponding algorithms
 		boolean useSimplePathAlgo = expr.isSimplePathFormula();
 
-		if (useSimplePathAlgo &&
-		    prism.getSettings().getBoolean(PrismSettings.PRISM_PATH_VIA_AUTOMATA) &&
+		if (useSimplePathAlgo && settings.getBoolean(PrismSettings.PRISM_PATH_VIA_AUTOMATA) &&
 		    LTLModelChecker.isSupportedLTLFormula(model.getModelType(), expr)) {
 			// If PRISM_PATH_VIA_AUTOMATA is true, we want to use the LTL engine
 			// whenever possible
@@ -1300,9 +1306,10 @@ public class NondetModelChecker extends NonProbModelChecker
 		// Output product, if required
 		if (prism.getExportProductTrans()) {
 			try {
-				int precision = getSettings().getInteger(PrismSettings.PRISM_EXPORT_MODEL_PRECISION);
+				ModelExportOptions exportOptions = new ModelExportOptions();
+				exportOptions.setModelPrecision(getSettings().getInteger(PrismSettings.PRISM_EXPORT_MODEL_PRECISION));
 				mainLog.println("\nExporting product transition matrix to file \"" + prism.getExportProductTransFilename() + "\"...");
-				modelProduct.exportToFile(Prism.EXPORT_PLAIN, true, new File(prism.getExportProductTransFilename()), precision);
+				modelProduct.exportToFile(new File(prism.getExportProductTransFilename()), exportOptions);
 			} catch (FileNotFoundException e) {
 				mainLog.printWarning("Could not export product transition matrix to file \"" + prism.getExportProductTransFilename() + "\"");
 			}
@@ -1310,7 +1317,7 @@ public class NondetModelChecker extends NonProbModelChecker
 		if (prism.getExportProductStates()) {
 			mainLog.println("\nExporting product state space to file \"" + prism.getExportProductStatesFilename() + "\"...");
 			PrismFileLog out = new PrismFileLog(prism.getExportProductStatesFilename());
-			modelProduct.exportStates(Prism.EXPORT_PLAIN, out);
+			modelProduct.exportStates(out, new ModelExportOptions());
 			out.close();
 		}
 
@@ -1562,10 +1569,10 @@ public class NondetModelChecker extends NonProbModelChecker
 		da = mcLtl.constructDFAForCosafetyRewardLTL(this, model, expr, labelDDs);
 
 		// If required, export DA
-		if (prism.getSettings().getExportPropAut()) {
-			mainLog.println("Exporting DA to file \"" + prism.getSettings().getExportPropAutFilename() + "\"...");
-			PrintStream out = PrismUtils.newPrintStream(prism.getSettings().getExportPropAutFilename());
-			da.print(out, prism.getSettings().getExportPropAutType());
+		if (settings.getExportPropAut()) {
+			mainLog.println("Exporting DA to file \"" + settings.getExportPropAutFilename() + "\"...");
+			PrintStream out = PrismUtils.newPrintStream(settings.getExportPropAutFilename());
+			da.print(out, settings.getExportPropAutType());
 			out.close();
 			//da.printDot(new java.io.PrintStream("da.dot"));
 		}
@@ -1575,9 +1582,10 @@ public class NondetModelChecker extends NonProbModelChecker
 		// Output product, if required
 		if (prism.getExportProductTrans()) {
 			try {
-				int precision = getSettings().getInteger(PrismSettings.PRISM_EXPORT_MODEL_PRECISION);
+				ModelExportOptions exportOptions = new ModelExportOptions();
+				exportOptions.setModelPrecision(getSettings().getInteger(PrismSettings.PRISM_EXPORT_MODEL_PRECISION));
 				mainLog.println("\nExporting product transition matrix to file \"" + prism.getExportProductTransFilename() + "\"...");
-				modelProduct.getProductModel().exportToFile(Prism.EXPORT_PLAIN, true, new File(prism.getExportProductTransFilename()), precision);
+				modelProduct.getProductModel().exportToFile(new File(prism.getExportProductTransFilename()), exportOptions);
 			} catch (FileNotFoundException e) {
 				mainLog.printWarning("Could not export product transition matrix to file \"" + prism.getExportProductTransFilename() + "\"");
 			}
@@ -1585,7 +1593,7 @@ public class NondetModelChecker extends NonProbModelChecker
 		if (prism.getExportProductStates()) {
 			mainLog.println("\nExporting product state space to file \"" + prism.getExportProductStatesFilename() + "\"...");
 			PrismFileLog out = new PrismFileLog(prism.getExportProductStatesFilename());
-			modelProduct.getProductModel().exportStates(Prism.EXPORT_PLAIN, out);
+			modelProduct.getProductModel().exportStates(out, new ModelExportOptions());
 			out.close();
 		}
 
@@ -1924,7 +1932,7 @@ public class NondetModelChecker extends NonProbModelChecker
 			String labelNames[] = { "init", "target" };
 			try {
 				mainLog.println("\nExporting target states info to file \"" + prism.getExportTargetFilename() + "\"...");
-				PrismMTBDD.ExportLabels(labels, labelNames, "l", model.getAllDDRowVars(), model.getODD(), Prism.EXPORT_PLAIN, prism.getExportTargetFilename());
+				PrismMTBDD.ExportLabels(labels, labelNames, "l", model.getAllDDRowVars(), model.getODD(), Prism.EXPORT_PLAIN, prism.getExportTargetFilename(), false, new ModelExportOptions().getPrintHeaders() ? "# Labels\n" : null);
 			} catch (FileNotFoundException e) {
 				mainLog.printWarning("Could not export target to file \"" + prism.getExportTargetFilename() + "\"");
 			}
@@ -2043,9 +2051,10 @@ public class NondetModelChecker extends NonProbModelChecker
 
 					if (false) {
 						try {
-							int precision = getSettings().getInteger(PrismSettings.PRISM_EXPORT_MODEL_PRECISION);
-							model.exportToFile(Prism.EXPORT_DOT, true, new File("model.dot"), precision);
-							transform.getTransformedModel().exportToFile(Prism.EXPORT_DOT, true, new File("quotient.dot"), precision);
+							ModelExportOptions exportOptions = new ModelExportOptions(ModelExportFormat.DOT);
+							exportOptions.setModelPrecision(getSettings().getInteger(PrismSettings.PRISM_EXPORT_MODEL_PRECISION));
+							model.exportToFile(new File("model.dot"), exportOptions);
+							transform.getTransformedModel().exportToFile(new File("quotient.dot"), exportOptions);
 						} catch (FileNotFoundException e) {
 						}
 					}
@@ -2308,7 +2317,10 @@ public class NondetModelChecker extends NonProbModelChecker
 			                                          model.getAllDDRowVars(),
 			                                          model.getAllDDColVars(),
 			                                          model.getAllDDNondetVars());
+			StopWatch mecTimer = new StopWatch(mainLog);
+			mecTimer.start("MEC computation");
 			ecComp.computeMECStates();
+			mecTimer.stop("found " + ecComp.getMECStates().size() + " MECs");
 
 			JDDNode positiveECs = JDD.Constant(0);
 
@@ -2480,7 +2492,7 @@ public class NondetModelChecker extends NonProbModelChecker
 			String labelNames[] = { "init", "target" };
 			try {
 				mainLog.println("\nExporting target states info to file \"" + prism.getExportTargetFilename() + "\"...");
-				PrismMTBDD.ExportLabels(labels, labelNames, "l", model.getAllDDRowVars(), model.getODD(), Prism.EXPORT_PLAIN, prism.getExportTargetFilename());
+				PrismMTBDD.ExportLabels(labels, labelNames, "l", model.getAllDDRowVars(), model.getODD(), Prism.EXPORT_PLAIN, prism.getExportTargetFilename(), false, new ModelExportOptions().getPrintHeaders() ? "# Labels\n" : null);
 			} catch (FileNotFoundException e) {
 				mainLog.printWarning("Could not export target to file \"" + prism.getExportTargetFilename() + "\"");
 			}
@@ -2523,9 +2535,11 @@ public class NondetModelChecker extends NonProbModelChecker
 
 					ECComputer ecComp = new ECComputerDefault(prism, zeroReach, zeroTrans, zeroTrans01, model.getAllDDRowVars(), model.getAllDDColVars(),
 							model.getAllDDNondetVars());
+					StopWatch mecTimer = new StopWatch(mainLog);
+					mecTimer.start("zero-cost MEC computation");
 					ecComp.computeMECStates();
-
 					zeroCostEndComponents = ecComp.getMECStates();
+					mecTimer.stop("found " + zeroCostEndComponents.size() + " zero-cost MECs");
 
 					JDD.Deref(zeroReach);
 					JDD.Deref(zeroTrans);

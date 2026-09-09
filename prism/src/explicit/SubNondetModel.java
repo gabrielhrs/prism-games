@@ -28,17 +28,20 @@
 package explicit;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.BitSet;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import common.IterableStateSet;
+import explicit.rewards.Rewards;
 import io.ModelExportOptions;
 import parser.State;
 import parser.Values;
 import parser.VarList;
+import prism.ActionList;
+import prism.ActionListOwner;
 import prism.ModelType;
 import prism.PrismException;
 import prism.PrismLog;
@@ -49,17 +52,23 @@ import strat.MDStrategy;
  * used to translate between state ids for model and sub-model. Created sub-model will have new 
  * state numbering from 0 to number of states in the sub model.
  */
-public class SubNondetModel<Value> implements NondetModel<Value>
+public class SubNondetModel<Value> implements NondetModel<Value>, ActionListOwner
 {
 
 	private NondetModel<Value> model = null;
+	private ActionList actionList;
 	private BitSet states = null;
-	private Map<Integer, BitSet> actions = null;
 	private BitSet initialStates = null;
 	private List<State> statesList = null;
-	private Map<Integer, Integer> stateLookupTable = new HashMap<Integer, Integer>();
-	private Map<Integer, Map<Integer, Integer>> actionLookupTable = new HashMap<Integer, Map<Integer, Integer>>();
-	private Map<Integer, Integer> inverseStateLookupTable = new HashMap<Integer, Integer>();
+
+	/** sub-index → original state index */
+	private int[] subToOrig;
+	/** original state index → sub-index (-1 if not in sub-model) */
+	private int[] origToSub;
+	/** sub-index → array of original action indices, in order */
+	private int[][] subActionToOrig;
+	/** cached state count */
+	private int numSubStates;
 
 	/**
 	 * (Optionally) the stored predecessor relation. Becomes inaccurate after the model is changed!
@@ -73,12 +82,11 @@ public class SubNondetModel<Value> implements NondetModel<Value>
 	public SubNondetModel(NondetModel<Value> model, BitSet states, Map<Integer, BitSet> actions, BitSet initialStates)
 	{
 		this.model = model;
+		actionList = new ActionList(this::findActionsUsed);
 		this.states = states;
-		this.actions = actions;
 		this.initialStates = initialStates;
-
-		generateStatistics();
-		generateLookupTable(states, actions);
+		init(states, actions);
+		// actions is not stored; eligible for GC once this constructor returns
 	}
 
 	@Override
@@ -88,9 +96,27 @@ public class SubNondetModel<Value> implements NondetModel<Value>
 	}
 
 	@Override
+	public ActionList getActionList()
+	{
+		return actionList;
+	}
+
+	@Override
+	public List<Object> getActions()
+	{
+		return actionList.getActions();
+	}
+
+	@Override
+	public int actionIndex(Object action)
+	{
+		return actionList.actionIndex(action);
+	}
+
+	@Override
 	public int getNumStates()
 	{
-		return states.cardinality();
+		return numSubStates;
 	}
 
 	@Override
@@ -203,6 +229,42 @@ public class SubNondetModel<Value> implements NondetModel<Value>
 	}
 
 	@Override
+	public Rewards<Value> getRewardsByName(String name)
+	{
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
+	public Rewards<Value> getRewardsByPosition(int r)
+	{
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
+	public int getNumRewards()
+	{
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
+	public Rewards<Value> getRewards(int i)
+	{
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
+	public String getRewardName(int i)
+	{
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
+	public Integer getRewardPosition(int i)
+	{
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
 	public int getNumTransitions()
 	{
 		return numTransitions;
@@ -233,12 +295,6 @@ public class SubNondetModel<Value> implements NondetModel<Value>
 	}
 
 	@Override
-	public void exportToDotFileWithStrat(PrismLog out, BitSet mark, int strat[], int precision)
-	{
-		throw new UnsupportedOperationException();
-	}
-	
-	@Override
 	public void exportToPrismLanguage(String filename, int precision) throws PrismException
 	{
 		throw new UnsupportedOperationException();
@@ -265,8 +321,7 @@ public class SubNondetModel<Value> implements NondetModel<Value>
 	@Override
 	public int getNumChoices(int s)
 	{
-		s = translateState(s);
-		return actions.get(s).cardinality();
+		return subActionToOrig[s].length;
 	}
 
 	@Override
@@ -337,22 +392,40 @@ public class SubNondetModel<Value> implements NondetModel<Value>
 		return translatedBitSet;
 	}
 
-	private void generateStatistics()
+	/**
+	 * Single-pass initialisation: build lookup arrays and accumulate statistics.
+	 * Not stored after construction so the caller's actions map can be GC'd immediately.
+	 */
+	private void init(BitSet states, Map<Integer, BitSet> actions)
 	{
-		for (int i : new IterableStateSet(states, model.getNumStates())){
-			numTransitions += getTransitions(i);
-			numChoices += actions.get(i).cardinality();
-			maxNumChoices = Math.max(maxNumChoices, model.getNumChoices(i));
-		}
-	}
+		numSubStates = states.cardinality();
+		origToSub = new int[model.getNumStates()];
+		Arrays.fill(origToSub, -1);
+		subToOrig = new int[numSubStates];
+		subActionToOrig = new int[numSubStates][];
 
-	private int getTransitions(int state)
-	{
-		int transitions = 0;
-		for (int i : new IterableStateSet(actions.get(state), model.getNumChoices(state))){
-			transitions += model.getNumTransitions(state, i);
+		int subIdx = 0;
+		for (int origState : new IterableStateSet(states, model.getNumStates())) {
+			origToSub[origState] = subIdx;
+			subToOrig[subIdx] = origState;
+
+			BitSet validActions = actions.get(origState);
+			int na = validActions.cardinality();
+			int[] origActions = new int[na];
+			int j = 0;
+			for (int a = validActions.nextSetBit(0); a >= 0; a = validActions.nextSetBit(a + 1)) {
+				origActions[j++] = a;
+			}
+			subActionToOrig[subIdx] = origActions;
+
+			numChoices += na;
+			maxNumChoices = Math.max(maxNumChoices, na);
+			for (int a : origActions) {
+				numTransitions += model.getNumTransitions(origState, a);
+			}
+
+			subIdx++;
 		}
-		return transitions;
 	}
 
 	@Override
@@ -361,32 +434,19 @@ public class SubNondetModel<Value> implements NondetModel<Value>
 		throw new RuntimeException("Not implemented");
 	}
 
-	private void generateLookupTable(BitSet states, Map<Integer, BitSet> actions)
-	{
-		for (int i : new IterableStateSet(states, model.getNumStates())){
-			inverseStateLookupTable.put(i, stateLookupTable.size());
-			stateLookupTable.put(stateLookupTable.size(), i);
-			Map<Integer, Integer> r = new HashMap<Integer, Integer>();
-			for (int j : new IterableStateSet(actions.get(i), model.getNumChoices(i))){
-				r.put(r.size(), j);
-			}
-			actionLookupTable.put(actionLookupTable.size(), r);
-		}
-	}
-
 	public int translateState(int s)
 	{
-		return stateLookupTable.get(s);
+		return subToOrig[s];
 	}
 
 	private int inverseTranslateState(int s)
 	{
-		return inverseStateLookupTable.get(s);
+		return origToSub[s];
 	}
 
 	public int translateAction(int s, int i)
 	{
-		return actionLookupTable.get(s).get(i);
+		return subActionToOrig[s][i];
 	}
 
 	@Override

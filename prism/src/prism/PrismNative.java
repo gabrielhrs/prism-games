@@ -26,6 +26,8 @@
 
 package prism;
 
+import jdd.JDD;
+
 /**
  * Set methods to pass options to native code.
  * And a few utility methods, relying on native methods in the "prism" shared library.
@@ -43,12 +45,13 @@ public class PrismNative
 			System.exit(1);
 		}
 	}
-	
+
 	// Initialise/close down methods
 	
 	public static void initialise(Prism prism)
 	{
 		setPrism(prism);
+		setCUDDManager();
 	}
 	
 	public static void closeDown()
@@ -72,7 +75,38 @@ public class PrismNative
 		PrismNative.prism = prism;
 		PN_SetPrism(prism);
 	}
-	
+
+	// cudd manager
+
+	// jni method to set cudd manager for native code
+	private static native void PN_SetCUDDManager(long ddm);
+	public static void setCUDDManager()
+	{
+		PN_SetCUDDManager(JDD.GetCUDDManager());
+	}
+
+	// main log
+
+	// place to store main log for java code
+	private static PrismLog mainLog;
+	// jni method to set main log for native code
+	private static native void PN_SetMainLog(PrismLog log);
+	// method to set main log both in java and c++
+	public static void setMainLog(PrismLog log)
+	{
+		mainLog = log;
+		PN_SetMainLog(log);
+	}
+
+	// Error message handling
+	public static native String PN_GetErrorMessage();
+
+	private static native void PN_SetExportIterations(boolean value);
+	public static void SetExportIterations(boolean value)
+	{
+		PN_SetExportIterations(value);
+	}
+
 	// Options passing
 	
 	private static native void PN_SetCompact(boolean b);

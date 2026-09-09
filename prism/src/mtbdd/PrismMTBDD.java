@@ -44,7 +44,7 @@ public class PrismMTBDD
 	static
 	{
 		try {
-			System.loadLibrary("prismmtbdd");
+			System.loadLibrary("prism");
 		}
 		catch (UnsatisfiedLinkError e) {
 			System.out.println(e);
@@ -53,82 +53,12 @@ public class PrismMTBDD
 	}
 	
 	//------------------------------------------------------------------------------
-	// initialise/close down methods
-	//------------------------------------------------------------------------------
-
-	public static void initialise(PrismLog mainLog, PrismLog techLog)
-	{
-		setCUDDManager();
-		setMainLog(mainLog);
-		setTechLog(techLog);
-	}
-	
-	public static void closeDown()
-	{
-		// tidy up any JNI stuff
-		PM_FreeGlobalRefs();
-	}
-
-	// tidy up in jni (free global references)
-	private static native void PM_FreeGlobalRefs();
-
-	//------------------------------------------------------------------------------
-	// cudd manager
-	//------------------------------------------------------------------------------
-
-	// cudd manager
-	
-	// jni method to set cudd manager for native code
-	private static native void PM_SetCUDDManager(long ddm);
-	public static void setCUDDManager()
-	{
-		PM_SetCUDDManager(JDD.GetCUDDManager());
-	}
-	
-	//------------------------------------------------------------------------------
-	// logs
-	//------------------------------------------------------------------------------
-
-	// main log
-	
-	// place to store main log for java code
-	private static PrismLog mainLog;
-	// jni method to set main log for native code
-	private static native void PM_SetMainLog(PrismLog log);
-	// method to set main log both in java and c++
-	public static void setMainLog(PrismLog log)
-	{
-		mainLog = log;
-		PM_SetMainLog(log);
-	}
-	
-	// tech log
-	
-	// place to store tech log for java code
-	private static PrismLog techLog;
-	// jni method to set tech log for native code
-	private static native void PM_SetTechLog(PrismLog log);
-	// method to set tech log both in java and c++
-	public static void setTechLog(PrismLog log)
-	{
-		techLog = log;
-		PM_SetTechLog(log);
-	}
-
-	private static native void PM_SetExportIterations(boolean value);
-	public static void SetExportIterations(boolean value)
-	{
-		PM_SetExportIterations(value);
-	}
-
-	//------------------------------------------------------------------------------
 	// error message
 	//------------------------------------------------------------------------------
 	
-	private static native String PM_GetErrorMessage();
 	public static String getErrorMessage()
 	{
-		return PM_GetErrorMessage();
+		return PrismNative.PN_GetErrorMessage();
 	}
 
 	/**
@@ -589,35 +519,35 @@ public class PrismMTBDD
 	//------------------------------------------------------------------------------
 
 	// export vector
-	private static native int PM_ExportVector(long vector, String name, long vars, int nv, long odd, int exportType, String filename, String rewardStructName, boolean noexportheaders);
-	public static void ExportVector(JDDNode vector, String name, JDDVars vars, ODDNode odd, int exportType, String filename, int precision, String rewardStructName, boolean noexportheaders) throws FileNotFoundException
+	private static native int PM_ExportVector(long vector, String name, long vars, int nv, long odd, int exportType, String filename, boolean append, String headerText);
+	public static void ExportVector(JDDNode vector, String name, JDDVars vars, ODDNode odd, int exportType, String filename, boolean append, int precision, String headerText) throws FileNotFoundException
 	{
 		PrismNative.setExportModelPrecision(precision);
-		int res = PM_ExportVector(vector.ptr(), name, vars.array(), vars.n(), odd.ptr(), exportType, filename, rewardStructName, noexportheaders);
+		int res = PM_ExportVector(vector.ptr(), name, vars.array(), vars.n(), odd.ptr(), exportType, filename, append, headerText);
 		if (res == -1) {
 			throw new FileNotFoundException();
 		}
 	}
-	
+
 	// export matrix
-	private static native int PM_ExportMatrix(long matrix, String name, long rv, int nrv, long cv, int ncv, long odd, int exportType, String filename, String rewardStructName, boolean noexportheaders);
-	public static void ExportMatrix(JDDNode matrix, String name, JDDVars rows, JDDVars cols, ODDNode odd, int exportType, String filename, int precision, String rewardStructName, boolean noexportheaders) throws FileNotFoundException
+	private static native int PM_ExportMatrix(long matrix, String name, long rv, int nrv, long cv, int ncv, long odd, int exportType, String filename, boolean append, String headerText);
+	public static void ExportMatrix(JDDNode matrix, String name, JDDVars rows, JDDVars cols, ODDNode odd, int exportType, String filename, boolean append, int precision, String headerText) throws FileNotFoundException
 	{
 		PrismNative.setExportModelPrecision(precision);
-		int res = PM_ExportMatrix(matrix.ptr(), name, rows.array(), rows.n(), cols.array(), cols.n(), odd.ptr(), exportType, filename, rewardStructName, noexportheaders);
+		int res = PM_ExportMatrix(matrix.ptr(), name, rows.array(), rows.n(), cols.array(), cols.n(), odd.ptr(), exportType, filename, append, headerText);
 		if (res == -1) {
 			throw new FileNotFoundException();
 		}
 	}
-	
+
 	// export labels
-	private static native int PM_ExportLabels(long labels[], String labelNames[], String name, long vars, int nv, long odd, int exportType, String filename);
-	public static void ExportLabels(JDDNode labels[], String labelNames[], String name, JDDVars vars, ODDNode odd, int exportType, String filename) throws FileNotFoundException
+	private static native int PM_ExportLabels(long labels[], String labelNames[], String name, long vars, int nv, long odd, int exportType, String filename, boolean append, String headerText);
+	public static void ExportLabels(JDDNode labels[], String labelNames[], String name, JDDVars vars, ODDNode odd, int exportType, String filename, boolean append, String headerText) throws FileNotFoundException
 	{
 		long ptrs[] = new long[labels.length];
 		for (int i = 0; i < labels.length; i++)
 			ptrs[i] = labels[i].ptr();
-		int res = PM_ExportLabels(ptrs, labelNames, name, vars.array(), vars.n(), odd.ptr(), exportType, filename);
+		int res = PM_ExportLabels(ptrs, labelNames, name, vars.array(), vars.n(), odd.ptr(), exportType, filename, append, headerText);
 		if (res == -1) {
 			throw new FileNotFoundException();
 		}

@@ -30,7 +30,9 @@ package explicit;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -42,6 +44,7 @@ import explicit.rewards.MDPRewards;
 import io.ExplicitModelImporter;
 import io.IOUtils;
 import parser.State;
+import prism.ActionListOwner;
 import prism.PrismException;
 import prism.PrismUtils;
 
@@ -95,12 +98,7 @@ public class MDPSparse extends MDPExplicit<Double>
 	public MDPSparse(final MDP<Double> mdp, boolean sort)
 	{
 		initialise(mdp.getNumStates());
-
-		setStatesList(mdp.getStatesList());
-		setConstantValues(mdp.getConstantValues());
-		for (String label : mdp.getLabels()) {
-			addLabel(label, mdp.getLabelStates(label));
-		}
+		copyFrom(mdp);
 
 		// Copy stats
 		numDistrs = mdp.getNumChoices();
@@ -117,13 +115,6 @@ public class MDPSparse extends MDPExplicit<Double>
 		final TreeMap<Integer, Double> sorted = sort ? new TreeMap<Integer, Double>() : null;
 		int rowIndex = 0, choiceIndex = 0;
 		for (int state = 0; state < numStates; state++) {
-			if (mdp.isInitialState(state)) {
-				addInitialState(state);
-			}
-			if (mdp.isDeadlockState(state)) {
-				deadlocks.add(state);
-			}
-
 			rowStarts[state] = rowIndex;
 			if (actions != null) {
 				for (int choice = 0, numChoices = mdp.getNumChoices(state); choice < numChoices; choice++) {
@@ -311,6 +302,9 @@ public class MDPSparse extends MDPExplicit<Double>
 	public MDPSparse(MDP<Double> mdp, List<Integer> states, List<List<Integer>> actions)
 	{
 		initialise(states.size());
+		if (mdp instanceof ActionListOwner) {
+			actionList.copyFrom(((ActionListOwner) mdp).getActionList());
+		}
 		for (int in : mdp.getInitialStates()) {
 			addInitialState(in);
 		}
@@ -394,18 +388,25 @@ public class MDPSparse extends MDPExplicit<Double>
 		cols = new int[numTransitions];
 		nonZeros = new double[numTransitions];
 		actions = new Object[numDistrs];
-		IOUtils.MDPTransitionConsumer<Double> cons = new IOUtils.MDPTransitionConsumer<Double>() {
+		IOUtils.MDPTransitionConsumer<Double> cons = new IOUtils.MDPTransitionConsumer<>() {
 			int sLast = -1;
 			int iLast = -1;
 			int count = 0;
 			int countCh = 0;
+
 			@Override
-			public void accept(int s, int i, int s2, Double d, Object a)
+			public void accept(int s, int i, int s2, Double d, Object a) throws PrismException
 			{
+				if (s < sLast) {
+					throw new PrismException("Imported states/transitions must be in ascending order");
+				}
 				if (s != sLast) {
 					rowStarts[s] = countCh;
 					sLast = s;
 					iLast = -1;
+				}
+				if (i < iLast) {
+					throw new PrismException("Imported states/transitions must be in ascending order");
 				}
 				if (i != iLast) {
 					choiceStarts[countCh] = count;
@@ -421,6 +422,7 @@ public class MDPSparse extends MDPExplicit<Double>
 		rowStarts[numStates] = numDistrs;
 		choiceStarts[numDistrs] = numTransitions;
 		modelImporter.extractMDPTransitions(cons);
+		actionList.markNeedsRecomputing();
 		// Compute maxNumDistrs
 		maxNumDistrs = 0;
 		for (int s = 0; s < numStates; s++) {
@@ -429,6 +431,27 @@ public class MDPSparse extends MDPExplicit<Double>
 	}
 
 	// Accessors (for Model)
+
+	@Override
+	public List<Object> findActionsUsed()
+	{
+		if (actions == null) {
+			return Collections.singletonList(null);
+		} else {
+			LinkedHashSet<Object> allActions = new LinkedHashSet<>();
+			int n = actions.length;
+			for (int i = 0; i < n; i++) {
+				allActions.add(actions[i]);
+			}
+			return new ArrayList<>(allActions);
+		}
+	}
+
+	@Override
+	public boolean onlyNullActionUsed()
+	{
+		return actions == null;
+	}
 
 	@Override
 	public int getNumTransitions()
@@ -1097,37 +1120,7 @@ public class MDPSparse extends MDPExplicit<Double>
 	@Override
 	public String toString()
 	{
-		int i, j, k, l1, h1, l2, h2;
-		Object o;
-		String s = "";
-		s = "[ ";
-		for (i = 0; i < numStates; i++) {
-			if (i > 0)
-				s += ", ";
-			s += i + ": [";
-			l1 = rowStarts[i];
-			h1 = rowStarts[i + 1];
-			for (j = l1; j < h1; j++) {
-				if (j > l1)
-					s += ",";
-				o = getAction(i, j - l1);
-				if (o != null)
-					s += o + ":";
-				s += "{";
-				l2 = choiceStarts[j];
-				h2 = choiceStarts[j + 1];
-				for (k = l2; k < h2; k++) {
-					if (k > l2)
-						s += ", ";
-					s += cols[k] + ":" + nonZeros[k];
-				}
-				s += "}";
-			}
-			s += "]";
-		}
-		s += " ]";
-
-		return s;
+		return toStringMDP();
 	}
 
 	@Override

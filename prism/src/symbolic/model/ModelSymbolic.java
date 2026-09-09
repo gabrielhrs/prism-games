@@ -26,6 +26,8 @@
 
 package symbolic.model;
 
+import io.ModelExportFormat;
+import io.ModelExportOptions;
 import jdd.JDD;
 import jdd.JDDNode;
 import jdd.JDDVars;
@@ -42,6 +44,7 @@ import prism.PrismUtils;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -69,7 +72,7 @@ public abstract class ModelSymbolic implements Model
 	/** Number of reward structs */
 	protected int numRewardStructs;
 	/** Reward struct names */
-	protected String[] rewardStructNames;
+	protected String[] rewardStructNames = new String[0];
 	// Stats
 	/** Number of states */
 	protected double numStates;
@@ -91,9 +94,9 @@ public abstract class ModelSymbolic implements Model
 	/** Deadlock states BDD (may have been fixed) */
 	protected JDDNode deadlocks;
 	/** State rewards MTBDDs */
-	protected JDDNode stateRewards[];
+	protected JDDNode stateRewards[] = new JDDNode[0];
 	/** Transition rewards MTBDDs */
-	protected JDDNode transRewards[];
+	protected JDDNode transRewards[] = new JDDNode[0];
 
 	/** DD variable info */
 	protected ModelVariablesDD modelVariables;
@@ -415,13 +418,43 @@ public abstract class ModelSymbolic implements Model
 
 	/**
 	 * Find all deadlock states and store this information in the model.
-	 * If requested (if fix=true) and if needed (i.e. for DTMCs/CTMCs),
-	 * fix deadlocks by adding self-loops in these states.
+	 * If requested (if fix=true), fix deadlocks by adding self-loops in these states.
 	 * The set of deadlocks (before any possible fixing) can be obtained from {@link #getDeadlocks()}.
 	 */
 	public abstract void findDeadlocks(boolean fix);
 
+	/**
+	 * Mark additional states as deadlocks.
+	 *
+	 * <br>[ DEREFS: moreDeadlocks ]
+	 */
+	public void addDeadlocks(JDDNode moreDeadlocks)
+	{
+		if (deadlocks == null) {
+			deadlocks = moreDeadlocks;
+		} else {
+			deadlocks = JDD.Or(deadlocks, moreDeadlocks);
+		}
+	}
+
 	// Accessors (for prism.Model & symbolic.Model interface)
+
+	@Override
+	public List<Object> getActions()
+	{
+		// Over-approximate and assume that unlabelled actions could occur
+		ArrayList<Object> actions = new ArrayList<>();
+		actions.add(null);
+		actions.addAll(synchs);
+		return actions;
+	}
+
+	@Override
+	public List<Object> findActionsUsed()
+	{
+		// Not yet implemented
+		throw new UnsupportedOperationException();
+	}
 
 	@Override
 	public int getNumStates()
@@ -544,6 +577,12 @@ public abstract class ModelSymbolic implements Model
 	}
 
 	@Override
+	public String getRewardStructName(int i)
+	{
+		return rewardStructNames[i];
+	}
+
+	@Override
 	public JDDNode getStateRewards(int i)
 	{
 		return (i >= 0 && i < numRewardStructs) ? stateRewards[i] : null;
@@ -638,17 +677,9 @@ public abstract class ModelSymbolic implements Model
 		log.println();
 
 		log.print(getTransName() + ": " + JDD.GetInfoString(trans, getNumDDVarsInTrans()));
-		log.print(", vars: " + getNumDDRowVars() + "r/" + getNumDDColVars() + "c\n");
+		log.print(", vars: " + getTransDDVarSummary() + "\n");
 		if (extra) {
-			log.print("DD vars (r/c):");
-			n = allDDRowVars.getNumVars();
-			for (i = 0; i < n; i++) {
-				j = allDDRowVars.getVarIndex(i);
-				log.print(" " + j + ":" + getDDVarNames().get(j));
-				j = allDDColVars.getVarIndex(i);
-				log.print(" " + j + ":" + getDDVarNames().get(j));
-			}
-			log.println();
+			log.print(getTransDDVarInfo() + "\n");
 			log.print(getTransName() + " terminals: " + JDD.GetTerminalsAndNumbersString(trans, getNumDDVarsInTrans()) + "\n");
 			log.print("Reach: " + JDD.GetNumNodes(reach) + " nodes\n");
 			log.print("ODD: " + ODDUtils.GetNumODDNodes() + " nodes\n");
@@ -680,18 +711,62 @@ public abstract class ModelSymbolic implements Model
 	}
 
 	@Override
-	public void exportStateRewardsToFile(int r, int exportType, File file, int precision, boolean noexportheaders)
-			throws FileNotFoundException, PrismException
+	public String getTransDDVarSummary()
 	{
-		PrismMTBDD.ExportVector(stateRewards[r], "c" + (r + 1), allDDRowVars, odd, exportType, (file == null) ? null : file.getPath(), precision,
-				rewardStructNames[r], noexportheaders);
+		return getNumDDRowVars() + "r/" + getNumDDColVars() + "c";
 	}
 
 	@Override
-	public void exportStates(int exportType, PrismLog log)
+	public String getTransDDVarInfo()
 	{
+		String s = "DD vars (r/c):";
+		int n = allDDRowVars.getNumVars();
+		for (int i = 0; i < n; i++) {
+			int j = allDDRowVars.getVarIndex(i);
+			s += " " + j + ":" + getDDVarNames().get(j);
+			j = allDDColVars.getVarIndex(i);
+			s += " " + j + ":" + getDDVarNames().get(j);
+		}
+		return s;
+	}
+
+	@Override
+	public void exportStateRewardsToFile(int r, File file, ModelExportOptions exportOptions)
+			throws FileNotFoundException, PrismException
+	{
+		int exportType = Prism.convertExportType(exportOptions);
+		int precision = exportOptions.getModelPrecision();
+		PrismMTBDD.ExportVector(stateRewards[r], "c" + (r + 1), allDDRowVars, odd, exportType, (file == null) ? null : file.getPath(), exportOptions.getAppendToFile(), precision,
+				rewardHeaderText(rewardStructNames[r], true, exportOptions.getPrintHeaders()));
+	}
+
+	/**
+	 * Build the header text for a reward file, or null if headers are disabled.
+	 * @param rewardStructName Reward structure name (empty string if unnamed)
+	 * @param stateRewards True for state rewards, false for transition rewards
+	 * @param printHeaders Whether to include the header
+	 */
+	protected static String rewardHeaderText(String rewardStructName, boolean stateRewards, boolean printHeaders)
+	{
+		if (!printHeaders) {
+			return null;
+		}
+		String header = "# Reward structure";
+		if (!rewardStructName.isEmpty()) {
+			header += " \"" + rewardStructName + "\"";
+		}
+		header += "\n# " + (stateRewards ? "State" : "Transition") + " rewards\n";
+		return header;
+	}
+
+	@Override
+	public void exportStates(PrismLog log, ModelExportOptions exportOptions)
+	{
+		if (exportOptions.getPrintHeaders()) {
+			log.println("# States");
+		}
 		// Print header: list of model vars
-		if (exportType == Prism.EXPORT_MATLAB)
+		if (exportOptions.getFormat() == ModelExportFormat.MATLAB)
 			log.print("% ");
 		log.print("(");
 		int numVars = getNumVars();
@@ -701,17 +776,17 @@ public abstract class ModelSymbolic implements Model
 				log.print(",");
 		}
 		log.println(")");
-		if (exportType == Prism.EXPORT_MATLAB)
+		if (exportOptions.getFormat() == ModelExportFormat.MATLAB)
 			log.println("states=[");
 
 		// Print states
-		if (exportType != Prism.EXPORT_MATLAB)
-			getReachableStates().print(log);
-		else
+		if (exportOptions.getFormat() == ModelExportFormat.MATLAB)
 			getReachableStates().printMatlab(log);
+		else
+			getReachableStates().print(log);
 
 		// Print footer
-		if (exportType == Prism.EXPORT_MATLAB)
+		if (exportOptions.getFormat() == ModelExportFormat.MATLAB)
 			log.println("];");
 	}
 

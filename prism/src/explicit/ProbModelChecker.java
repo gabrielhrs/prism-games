@@ -1053,10 +1053,12 @@ public class ProbModelChecker extends NonProbModelChecker
 			res = ((SMGModelChecker) this).computeNextProbs((SMG<Double>) model, target, minMax.isMin1(), minMax.isMin2(), minMax.getCoalition());
 			break;
 		case IDTMC:
-			res = ((IDTMCModelChecker) this).computeNextProbs((IDTMC<Double>) model, target, minMax);
+		case UDTMC:
+			res = ((UDTMCModelChecker) this).computeNextProbs((UDTMC<Double>) model, target, minMax);
 			break;
 		case IMDP:
-			res = ((IMDPModelChecker) this).computeNextProbs((IMDP<Double>) model, target, minMax);
+		case UMDP:
+			res = ((UMDPModelChecker) this).computeNextProbs((UMDP<Double>) model, target, minMax);
 			break;
 		default:
 			throw new PrismNotSupportedException("Cannot model check " + expr + " for " + model.getModelType() + "s");
@@ -1121,10 +1123,12 @@ public class ProbModelChecker extends NonProbModelChecker
 				res = ((CSGModelChecker) this).computeUntilProbs((CSG<Double>) model, remain, target, minMax.isMin1(), minMax.isMin2(), minMax.getCoalition());
 				break;
 			case IDTMC:
-				res = ((IDTMCModelChecker) this).computeUntilProbs((IDTMC<Double>) model, remain, target, minMax);
+			case UDTMC:
+				res = ((UDTMCModelChecker) this).computeUntilProbs((UDTMC<Double>) model, remain, target, minMax);
 				break;
 			case IMDP:
-				res = ((IMDPModelChecker) this).computeUntilProbs((IMDP<Double>) model, remain, target, minMax);
+			case UMDP:
+				res = ((UMDPModelChecker) this).computeUntilProbs((UMDP<Double>) model, remain, target, minMax);
 				break;
 			default:
 				throw new PrismException("Cannot model check " + expr + " for " + model.getModelType() + "s");
@@ -1154,10 +1158,12 @@ public class ProbModelChecker extends NonProbModelChecker
 				res = ((CSGModelChecker) this).computeBoundedUntilProbs((CSG<Double>) model, remain, target, windowSize, minMax.isMin1(), minMax.isMin2(), minMax.getCoalition());
 				break;
 			case IDTMC:
-				res = ((IDTMCModelChecker) this).computeBoundedUntilProbs((IDTMC<Double>) model, remain, target, windowSize, minMax);
+			case UDTMC:
+				res = ((UDTMCModelChecker) this).computeBoundedUntilProbs((UDTMC<Double>) model, remain, target, windowSize, minMax);
 				break;
 			case IMDP:
-				res = ((IMDPModelChecker) this).computeBoundedUntilProbs((IMDP<Double>) model, remain, target, windowSize, minMax);
+			case UMDP:
+				res = ((UMDPModelChecker) this).computeBoundedUntilProbs((UMDP<Double>) model, remain, target, windowSize, minMax);
 				break;
 			default:
 				throw new PrismNotSupportedException("Cannot model check " + expr + " for " + model.getModelType() + "s");
@@ -1230,10 +1236,12 @@ public class ProbModelChecker extends NonProbModelChecker
 			res = ((CSGModelChecker) this).computeUntilProbs((CSG<Double>) model, remain, target, minMax.isMin1(), minMax.isMin2(), minMax.getCoalition());
 			break;
 		case IDTMC:
-			res = ((IDTMCModelChecker) this).computeUntilProbs((IDTMC<Double>) model, remain, target, minMax);
+		case UDTMC:
+			res = ((UDTMCModelChecker) this).computeUntilProbs((UDTMC<Double>) model, remain, target, minMax);
 			break;
 		case IMDP:
-			res = ((IMDPModelChecker) this).computeUntilProbs((IMDP<Double>) model, remain, target, minMax);
+		case UMDP:
+			res = ((UMDPModelChecker) this).computeUntilProbs((UMDP<Double>) model, remain, target, minMax);
 			break;
 		default:
 			throw new PrismNotSupportedException("Cannot model check " + expr + " for " + model.getModelType() + "s");
@@ -1282,6 +1290,7 @@ public class ProbModelChecker extends NonProbModelChecker
 	/**
 	 * Model check an R operator expression and return the values for all states.
 	 */
+	@SuppressWarnings({ "unchecked", "rawtypes" })
 	protected StateValues checkExpressionReward(Model<?> model, ExpressionReward expr, boolean forAll, Coalition coalition, BitSet statesOfInterest) throws PrismException
 	{
 
@@ -1310,10 +1319,11 @@ public class ProbModelChecker extends NonProbModelChecker
 		OpRelOpBound opInfo = expr.getRelopBoundInfo(constantValues);
 		MinMax minMax = opInfo.getMinMax(model.getModelType(), forAll, coalition);
 
-		// Build rewards
-		int r = expr.getRewardStructIndexByIndexObject(rewardGen, constantValues);
+		// Build rewards for the index specified in the R operator
+		int r = expr.getRewardStructIndexByIndexObject(getRewardGenerator(model), constantValues);
 		mainLog.println("Building reward structure...");
-		Rewards<?> rewards = Expression.usesInstantaneousReward(expr.getExpression()) ? constructRewards(model, r) : constructExpectedRewards(model, r);
+		boolean expected = !Expression.usesInstantaneousReward(expr.getExpression());
+		Rewards<?> rewards = constructRewards(model, r, model.getModelType() == ModelType.CSG, expected);
 
 		// Compute rewards
 		StateValues rews = checkRewardFormula(model, rewards, expr.getExpression(), minMax, statesOfInterest);
@@ -1609,10 +1619,12 @@ public class ProbModelChecker extends NonProbModelChecker
 			}
 			break;
 		case IDTMC:
-			res = ((IDTMCModelChecker) this).computeReachRewards((IDTMC<Double>) model, (MCRewards<Double>) modelRewards, target, minMax);
+		case UDTMC:
+			res = ((UDTMCModelChecker) this).computeReachRewards((UDTMC<Double>) model, (MCRewards<Double>) modelRewards, target, minMax);
 			break;
 		case IMDP:
-			res = ((IMDPModelChecker) this).computeReachRewards((IMDP<Double>) model, (MDPRewards<Double>) modelRewards, target, minMax);
+		case UMDP:
+			res = ((UMDPModelChecker) this).computeReachRewards((UMDP<Double>) model, (MDPRewards<Double>) modelRewards, target, minMax);
 			break;
 		default:
 			throw new PrismNotSupportedException("Explicit engine does not yet handle the " + expr.getOperatorSymbol() + " reward operator for " + model.getModelType()

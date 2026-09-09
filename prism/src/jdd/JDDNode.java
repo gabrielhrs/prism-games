@@ -42,7 +42,7 @@ public class JDDNode
 	static
 	{
 		try {
-			System.loadLibrary("jdd");
+			System.loadLibrary("prism");
 		}
 		catch (UnsatisfiedLinkError e) {
 			System.out.println(e);
@@ -174,6 +174,21 @@ public class JDDNode
 			JDD.Ref(result);
 			return result;
 		}
+	}
+
+	/**
+	 * Helper method to get the pointers for all JDDNodes in an array.
+	 */
+	public static long[] ptrs(JDDNode[] dds)
+	{
+		if (dds == null) {
+			return null;
+		}
+		long[] ptrs = new long[dds.length];
+		for (int i = 0; i < dds.length; i++) {
+			ptrs[i] = dds[i] != null ? dds[i].ptr() : 0;
+		}
+		return ptrs;
 	}
 }
 

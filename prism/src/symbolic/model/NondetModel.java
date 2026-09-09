@@ -26,6 +26,7 @@
 
 package symbolic.model;
 
+import io.ModelExportOptions;
 import jdd.JDD;
 import jdd.JDDNode;
 import jdd.JDDVars;
@@ -37,6 +38,7 @@ import parser.ast.Declaration;
 import parser.ast.DeclarationInt;
 import parser.ast.Expression;
 import prism.ModelType;
+import prism.Prism;
 import prism.PrismException;
 import prism.PrismLog;
 import prism.PrismUtils;
@@ -281,31 +283,49 @@ public class NondetModel extends ModelSymbolic
 		super.printTransInfo(log, extra);
 		if (extra) {
 			if (transActions != null) {
-				log.print("Action label info (");
-				log.println(JDD.GetInfoString(transActions, getNumDDVarsInTrans()));
+				log.print("Choice action info: ");
+				log.println(JDD.GetInfoString(transActions, allDDRowVars.n() + allDDNondetVars.n()));
 			}
 		}
 	}
 
 	@Override
-	public void exportToFile(int exportType, boolean explicit, File file, int precision) throws FileNotFoundException, PrismException
+	public String getTransDDVarSummary()
 	{
-		if (!explicit) {
-			// can only do explicit (sparse matrix based) export for mdps
-		} else {
-			PrismSparse.ExportMDP(trans, transActions, getSynchs(), getTransSymbol(), allDDRowVars, allDDColVars, allDDNondetVars, odd, exportType,
-					(file != null) ? file.getPath() : null, precision);
-		}
+		return super.getTransDDVarSummary() + "/" + getNumDDNondetVars() + "nd";
 	}
 
 	@Override
-	public void exportTransRewardsToFile(int r, int exportType, boolean ordered, File file, int precision, boolean noexportheaders) throws FileNotFoundException, PrismException
+	public String getTransDDVarInfo()
 	{
-		if (!ordered) {
-			// can only do explicit (sparse matrix based) export for mdps
-		} else {
-			PrismSparse.ExportSubMDP(trans, transRewards[r], "C" + (r + 1), allDDRowVars, allDDColVars, allDDNondetVars, odd, exportType, (file == null) ? null : file.getPath(), precision, rewardStructNames[r], noexportheaders);
+		String s = "DD vars (nd):";
+		int n = allDDNondetVars.getNumVars();
+		for (int i = 0; i < n; i++) {
+			int j = allDDNondetVars.getVarIndex(i);
+			s += " " + j + ":" + getDDVarNames().get(j);
 		}
+		s += "\n" + super.getTransDDVarInfo();
+		return s;
+	}
+
+	@Override
+	public void exportToFile(File file, ModelExportOptions exportOptions) throws FileNotFoundException, PrismException
+	{
+		int exportType = Prism.convertExportTypeTrans(exportOptions);
+		int precision = exportOptions.getModelPrecision();
+		String headerText = exportOptions.getPrintHeaders() ? "# Transitions (" + getModelType() + ")\n" : null;
+		JDDNode transActions = exportOptions.getShowActions() ? this.transActions : null;
+		PrismSparse.ExportMDP(trans, transActions, getSynchs(), getTransSymbol(), allDDRowVars, allDDColVars, allDDNondetVars, odd, exportType,
+				(file != null) ? file.getPath() : null, exportOptions.getAppendToFile(), precision, headerText);
+	}
+
+	@Override
+	public void exportTransRewardsToFile(int r, File file, ModelExportOptions exportOptions) throws FileNotFoundException, PrismException
+	{
+		int exportType = Prism.convertExportTypeTrans(exportOptions);
+		int precision = exportOptions.getModelPrecision();
+		PrismSparse.ExportSubMDP(trans, transRewards[r], "C" + (r + 1), allDDRowVars, allDDColVars, allDDNondetVars, odd, exportType, (file == null) ? null : file.getPath(), exportOptions.getAppendToFile(), precision,
+				rewardHeaderText(rewardStructNames[r], false, exportOptions.getPrintHeaders()));
 	}
 
 	@Override

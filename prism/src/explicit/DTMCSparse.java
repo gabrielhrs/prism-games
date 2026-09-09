@@ -30,9 +30,13 @@
 package explicit;
 
 import java.util.AbstractMap;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map.Entry;
 import java.util.PrimitiveIterator.OfInt;
 import java.util.function.Function;
@@ -42,6 +46,7 @@ import common.iterable.PrimitiveIterable;
 import explicit.rewards.MCRewards;
 import io.ExplicitModelImporter;
 import io.IOUtils;
+import prism.ActionListOwner;
 import prism.Pair;
 import prism.PrismException;
 import prism.PrismNotSupportedException;
@@ -67,18 +72,7 @@ public class DTMCSparse extends DTMCExplicit<Double>
 	public DTMCSparse(final DTMC<Double> dtmc)
 	{
 		initialise(dtmc.getNumStates());
-		for (Integer state : dtmc.getDeadlockStates()) {
-			deadlocks.add(state);
-		}
-		for (Integer state : dtmc.getInitialStates()) {
-			initialStates.add(state);
-		}
-		constantValues = dtmc.getConstantValues();
-		varList = dtmc.getVarList();
-		statesList = dtmc.getStatesList();
-		for (String label : dtmc.getLabels()) {
-			labels.put(label, dtmc.getLabelStates(label));
-		}
+		copyFrom(dtmc);
 
 		// Copy transition function
 		final int numTransitions = dtmc.getNumTransitions();
@@ -110,6 +104,9 @@ public class DTMCSparse extends DTMCExplicit<Double>
 	public DTMCSparse(final DTMC<Double> dtmc, int[] permut)
 	{
 		initialise(dtmc.getNumStates());
+		if (dtmc instanceof ActionListOwner) {
+			actionList.copyFrom(((ActionListOwner) dtmc).getActionList());
+		}
 		for (Integer state : dtmc.getDeadlockStates()) {
 			deadlocks.add(permut[state]);
 		}
@@ -163,6 +160,27 @@ public class DTMCSparse extends DTMCExplicit<Double>
 	//--- Model ---
 
 	@Override
+	public List<Object> findActionsUsed()
+	{
+		if (actions == null) {
+			return Collections.singletonList(null);
+		} else {
+			LinkedHashSet<Object> allActions = new LinkedHashSet<>();
+			int n = actions.length;
+			for (int i = 0; i < n; i++) {
+				allActions.add(actions[i]);
+			}
+			return new ArrayList<>(allActions);
+		}
+	}
+
+	@Override
+	public boolean onlyNullActionUsed()
+	{
+		return actions == null;
+	}
+
+	@Override
 	public int getNumTransitions()
 	{
 		return rows[numStates];
@@ -183,8 +201,7 @@ public class DTMCSparse extends DTMCExplicit<Double>
 	@Override
 	public SuccessorsIterator getSuccessors(int state)
 	{
-		// We assume here that all the successor states for a given state are distinct
-		return SuccessorsIterator.from(getSuccessorsIterator(state), true);
+		return SuccessorsIterator.from(getSuccessorsIterator(state), false);
 	}
 
 	@Override
@@ -250,17 +267,21 @@ public class DTMCSparse extends DTMCExplicit<Double>
 	public void buildFromExplicitImport(ExplicitModelImporter modelImporter) throws PrismException
 	{
 		initialise(modelImporter.getNumStates());
+		actionList.markNeedsRecomputing();
 		int numTransitions = modelImporter.getNumTransitions();
 		rows = new int[numStates + 1];
 		columns = new int[numTransitions];
 		probabilities = new double[numTransitions];
 		actions = new Object[numTransitions];
-		IOUtils.MCTransitionConsumer<Double> cons = new IOUtils.MCTransitionConsumer<Double>() {
+		IOUtils.MCTransitionConsumer<Double> cons = new IOUtils.MCTransitionConsumer<>() {
 			int sLast = -1;
 			int count = 0;
 			@Override
-			public void accept(int s, int s2, Double d, Object a)
+			public void accept(int s, int s2, Double d, Object a) throws PrismException
 			{
+				if (s < sLast) {
+					throw new PrismException("Imported states/transitions must be in ascending order");
+				}
 				if (s != sLast) {
 					rows[s] = count;
 					sLast = s;
@@ -349,6 +370,29 @@ public class DTMCSparse extends DTMCExplicit<Double>
 	}
 
 	@Override
+	public Iterator<Object> getActionsIterator(int s)
+	{
+		return new Iterator<>()
+		{
+			final int start = rows[s];
+			int col = start;
+			final int end = rows[s + 1];
+
+			@Override
+			public boolean hasNext()
+			{
+				return col < end;
+			}
+
+			@Override
+			public Object next()
+			{
+				return actions == null ? null : actions[col++];
+			}
+		};
+	}
+
+	@Override
 	public boolean prob0step(final int s, final BitSet u)
 	{
 		boolean hasTransitionToU = false;
@@ -418,6 +462,7 @@ public class DTMCSparse extends DTMCExplicit<Double>
 		for (int i=rows[state], stop=rows[state+1]; i < stop; i++) {
 			final int target = columns[i];
 			final double probability = probabilities[i];
+			//d += probability * (mcRewards.getTransitionReward(state, i-rows[state]) + vect[target]);
 			d += probability * vect[target];
 		}
 		return d;
@@ -471,33 +516,12 @@ public class DTMCSparse extends DTMCExplicit<Double>
 		}
 	}
 
-
-
 	//--- Object ---
 
 	@Override
 	public String toString()
 	{
-		final Function<Integer, Entry<Integer, Distribution<Double>>> getDistribution = new Function<Integer, Entry<Integer, Distribution<Double>>>()
-		{
-			@Override
-			public final Entry<Integer, Distribution<Double>> apply(final Integer state)
-			{
-				final Distribution<Double> distribution = new Distribution<>(getTransitionsIterator(state), getEvaluator());
-				return new AbstractMap.SimpleImmutableEntry<>(state, distribution);
-			}
-		};
-		String s = "trans: [ ";
-		IterableStateSet states = new IterableStateSet(numStates);
-		Iterator<Entry<Integer, Distribution<Double>>> distributions = states.iterator().map(getDistribution);
-		while (distributions.hasNext()) {
-			final Entry<Integer, Distribution<Double>> dist = distributions.next();
-			s += dist.getKey() + ": " + dist.getValue();
-			if (distributions.hasNext()) {
-				s += ", ";
-			}
-		}
-		return s + " ]";
+		return toStringDTMC();
 	}
 
 	@Override

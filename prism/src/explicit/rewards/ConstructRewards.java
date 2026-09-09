@@ -32,12 +32,16 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.BitSet;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.WeakHashMap;
 
 import explicit.CSG;
+import common.Interval;
 import explicit.DTMC;
+import explicit.IDTMC;
 import explicit.MDP;
 import explicit.Model;
 import explicit.NondetModel;
@@ -71,10 +75,18 @@ public class ConstructRewards extends PrismComponent
 	/** Allow negative rewards, i.e., weights. Defaults to false. */
 	protected boolean allowNegative = false;
 
-	/** Set flag that negative rewards are allowed, i.e., weights */
-	public void allowNegativeRewards()
+	/** Set flag that negative rewards are allowed. */
+	public ConstructRewards allowNegativeRewards()
 	{
-		allowNegative = true;
+		setAllowNegativeRewards(true);
+		return this;
+	}
+
+	/** Set whether negative rewards are allowed. */
+	public ConstructRewards setAllowNegativeRewards(boolean allowNegative)
+	{
+		this.allowNegative = allowNegative;
+		return this;
 	}
 
 	/**
@@ -87,9 +99,10 @@ public class ConstructRewards extends PrismComponent
 	 * Specify whether to construct expected reward, i.e., using probability-weighted sum for any rewards
 	 * attached to transitions, assigning them to states/choices. Defaults to false.
 	 */
-	public void setExpectedRewards(boolean expectedRewards)
+	public ConstructRewards setExpectedRewards(boolean expectedRewards)
 	{
 		this.expectedRewards = expectedRewards;
+		return this;
 	}
 
 	/**
@@ -106,9 +119,9 @@ public class ConstructRewards extends PrismComponent
 		}
 
 		// If the RewardGenerator already has the rewards built, use this (after checking)
-		if (rewardGen.isRewardLookupSupported(RewardLookup.BY_REWARD_OBJECT)) {
+		if (rewardGen.isRewardLookupSupported(r, RewardLookup.BY_REWARD_OBJECT)) {
 			Rewards<Value> rewardsObj = rewardGen.getRewardObject(r);
-			checkRewardObject(rewardsObj, rewardGen.getRewardObjectModel(), rewardGen.getRewardEvaluator());
+			rewardsObj = getExpectedRewards(rewardsObj, rewardGen.getRewardObjectModel(), rewardGen.getRewardEvaluator(), expectedRewards, allowNegative);
 			return rewardsObj;
 		}
 		// Extract some model info
@@ -149,7 +162,7 @@ public class ConstructRewards extends PrismComponent
 					}
 				}
 				// Markov chain models (rewards on transitions)
-				else {
+				else if (model instanceof DTMC) {
 					DTMC<Value> mcModel = (DTMC<Value>) model;
 					Iterator<Map.Entry<Integer, Pair<Value, Object>>> iter = mcModel.getTransitionsAndActionsIterator(s);
 					int i = 0;
@@ -168,6 +181,26 @@ public class ConstructRewards extends PrismComponent
 						}
 						i++;
 					}
+				} else if (model.getModelType() == ModelType.IDTMC) {
+					IDTMC<Value> mcModel = (IDTMC<Value>) model;
+					Iterator<Map.Entry<Integer, Pair<Interval<Value>, Object>>> iter = mcModel.getIntervalTransitionsAndActionsIterator(s);
+					int i = 0;
+					while (iter.hasNext()) {
+						Map.Entry<Integer, Pair<Interval<Value>, Object>> e = iter.next();
+						Value rew = getAndCheckStateActionReward(s, e.getValue().second, rewardGen, r, statesList);
+						if (rewardGen.getRewardEvaluator().isZero(rew)) {
+							i++;
+							continue;
+						}
+						if (expectedRewards) {
+							throw new PrismException("Can't construct expected rewards for IDTMCs");
+						} else {
+							rewards.addToTransitionReward(s, i, rew);
+						}
+						i++;
+					}
+				} else {
+					throw new PrismException("Cannot build rewards for " + model.getModelType() + "s");
 				}
 			}
 		}
@@ -222,13 +255,13 @@ public class ConstructRewards extends PrismComponent
 		Evaluator<Value> eval = rewardGen.getRewardEvaluator();
 		Value rew = eval.zero();
 		Object stateIndex = null;
-		if (rewardGen.isRewardLookupSupported(RewardLookup.BY_STATE)) {
+		if (rewardGen.isRewardLookupSupported(r, RewardLookup.BY_STATE)) {
 			State state = statesList.get(s);
 			stateIndex = state;
-			rew = rewardGen.getStateReward(r, state);
-		} else if (rewardGen.isRewardLookupSupported(RewardLookup.BY_STATE_INDEX)) {
+			rew = rewardGen.getStateReward(r, state, allowNegative);
+		} else if (rewardGen.isRewardLookupSupported(r, RewardLookup.BY_STATE_INDEX)) {
 			stateIndex = s;
-			rew = rewardGen.getStateReward(r, s);
+			rew = rewardGen.getStateReward(r, s, allowNegative);
 		} else {
 			throw new PrismException("Unknown reward lookup mechanism for reward generator");
 		}
@@ -249,13 +282,13 @@ public class ConstructRewards extends PrismComponent
 		Evaluator<Value> eval = rewardGen.getRewardEvaluator();
 		Value rew = eval.zero();
 		Object stateIndex = null;
-		if (rewardGen.isRewardLookupSupported(RewardLookup.BY_STATE)) {
+		if (rewardGen.isRewardLookupSupported(r, RewardLookup.BY_STATE)) {
 			State state = statesList.get(s);
 			stateIndex = state;
-			rew = rewardGen.getStateActionReward(r, state, action);
-		} else if (rewardGen.isRewardLookupSupported(RewardLookup.BY_STATE_INDEX)) {
+			rew = rewardGen.getStateActionReward(r, state, action, allowNegative);
+		} else if (rewardGen.isRewardLookupSupported(r, RewardLookup.BY_STATE_INDEX)) {
 			stateIndex = s;
-			rew = rewardGen.getStateActionReward(r, s, action);
+			rew = rewardGen.getStateActionReward(r, s, action, allowNegative);
 		} else {
 			throw new PrismException("Unknown reward lookup mechanism for reward generator");
 		}
@@ -564,6 +597,21 @@ public class ConstructRewards extends PrismComponent
 	 */
 	private <Value> void checkStateReward(Value rew, Evaluator<Value> eval, Object stateIndex, ASTElement ast) throws PrismException
 	{
+		checkStateReward(rew, eval, stateIndex, ast, allowNegative);
+	}
+
+	/**
+	 * Check that a state reward is legal. Throw an exception if not.
+	 * Optionally, provide a state where the error occurs (as an Object),
+	 * and/or a pointer to where the error occurs syntactically (as an ASTElement)
+	 * @param rew The reward value
+	 * @param eval Evaluator matching the type {@code Value} of the reward value
+	 * @param stateIndex The index of the state, for error reporting (optional)
+	 * @param ast Where the error occurred, for error reporting (optional)
+	 * @param allowNegative Whether negative rewards (i.e., weights) are allowed
+	 */
+	private static <Value> void checkStateReward(Value rew, Evaluator<Value> eval, Object stateIndex, ASTElement ast, boolean allowNegative) throws PrismException
+	{
 		String error = null;
 		// We omit the check in symbolic (parametric) cases - too expensive
 		if (!eval.isSymbolic()) {
@@ -596,6 +644,21 @@ public class ConstructRewards extends PrismComponent
 	 */
 	private <Value> void checkTransitionReward(Value rew, Evaluator<Value> eval, Object stateIndex, ASTElement ast) throws PrismException
 	{
+		checkTransitionReward(rew, eval, stateIndex, ast, allowNegative);
+	}
+
+	/**
+	 * Check that a transition reward is legal. Throw an exception if not.
+	 * Optionally, provide a state where the error occurs (as an Object),
+	 * and/or a pointer to where the error occurs syntactically (as an ASTElement)
+	 * @param rew The reward value
+	 * @param eval Evaluator matching the type {@code Value} of the reward value
+	 * @param stateIndex The index of the state, for error reporting (optional)
+	 * @param ast Where the error occurred, for error reporting (optional)
+	 * @param allowNegative Whether negative rewards (i.e., weights) are allowed
+	 */
+	private static <Value> void checkTransitionReward(Value rew, Evaluator<Value> eval, Object stateIndex, ASTElement ast, boolean allowNegative) throws PrismException
+	{
 		String error = null;
 		// We omit the check in symbolic (parametric) cases - too expensive
 		if (!eval.isSymbolic()) {
@@ -618,38 +681,130 @@ public class ConstructRewards extends PrismComponent
 	}
 
 	/**
+	 * Caches of the result of {@link #getExpectedRewards}, keyed on the identity of the
+	 * {@code rewards} object passed in (weakly, so entries disappear once that object is
+	 * no longer referenced elsewhere), and then, within that, on the identity of the
+	 * {@code model} passed in (also weakly). The per-model level is needed because the
+	 * same {@link Rewards} object can be checked/converted against different models
+	 * (e.g., a model view such as {@code DTMCAlteredDistributions} delegates
+	 * {@code getRewards*()} to an underlying model while presenting different transitions
+	 * of its own), and the (Markov chain) transition-to-expected-state-reward conversion
+	 * depends on the transition structure of the model passed in, not just the rewards.
+	 * A separate cache is kept for each combination of the {@code expectedRewards}/
+	 * {@code allowNegative} flags, since the result differs.
+	 * <br>
+	 * This exists because a {@link Rewards} object obtained from an external source
+	 * (e.g., imported from file, or attached directly to a {@link Model}) may be checked
+	 * and/or converted repeatedly for the same underlying object - e.g., once per property
+	 * checked against the same model - and both the legality checks and the (Markov chain)
+	 * transition-to-expected-state-reward conversion are otherwise redone from scratch
+	 * (an O(number of states/transitions) pass) every time.
+	 */
+	private static final Map<Rewards<?>, Map<Model<?>, Rewards<?>>> expectedRewardsCacheFF = Collections.synchronizedMap(new WeakHashMap<>());
+	private static final Map<Rewards<?>, Map<Model<?>, Rewards<?>>> expectedRewardsCacheFT = Collections.synchronizedMap(new WeakHashMap<>());
+	private static final Map<Rewards<?>, Map<Model<?>, Rewards<?>>> expectedRewardsCacheTF = Collections.synchronizedMap(new WeakHashMap<>());
+	private static final Map<Rewards<?>, Map<Model<?>, Rewards<?>>> expectedRewardsCacheTT = Collections.synchronizedMap(new WeakHashMap<>());
+
+	/**
+	 * Get a version of {@code rewards} that is safe to pass to the (explicit engine)
+	 * solution methods, i.e., with all state/transition rewards checked for legality
+	 * and, if {@code expectedRewards} is true, with any (Markov chain) transition
+	 * rewards converted to expected state rewards (since solution methods for
+	 * Markov chains do not read transition rewards directly).
+	 * <br>
+	 * Use this (rather than constructing rewards afresh) for any {@link Rewards} object
+	 * that was not just built by this class, e.g., one obtained directly from a model
+	 * (see {@link Model#getRewards}) or from a {@link RewardGenerator} that supplies
+	 * rewards objects directly (see {@link RewardGenerator.RewardLookup#BY_REWARD_OBJECT}).
+	 * The result is cached against the identity of {@code rewards} and {@code model}.
+	 * @param rewards The rewards to check/convert
+	 * @param model The model that the rewards are for
+	 * @param eval Evaluator matching the type {@code Value} of the reward value
+	 * @param expectedRewards Whether to convert (Markov chain) transition rewards to expected state rewards
+	 * @param allowNegative Whether negative rewards (i.e., weights) are allowed
+	 */
+	@SuppressWarnings("unchecked")
+	public static <Value> Rewards<Value> getExpectedRewards(Rewards<Value> rewards, Model<Value> model, Evaluator<Value> eval, boolean expectedRewards, boolean allowNegative) throws PrismException
+	{
+		Map<Rewards<?>, Map<Model<?>, Rewards<?>>> cache = expectedRewards
+				? (allowNegative ? expectedRewardsCacheTT : expectedRewardsCacheTF)
+				: (allowNegative ? expectedRewardsCacheFT : expectedRewardsCacheFF);
+		Map<Model<?>, Rewards<?>> modelCache = cache.computeIfAbsent(rewards, k -> Collections.synchronizedMap(new WeakHashMap<>()));
+		Rewards<Value> cached = (Rewards<Value>) modelCache.get(model);
+		if (cached != null) {
+			return cached;
+		}
+		Rewards<Value> result = checkRewardObject(rewards, model, eval, expectedRewards, allowNegative);
+		modelCache.put(model, result);
+		return result;
+	}
+
+	/**
 	 * Check that all state/transition rewards in a Rewards object are legal. Throw an exception if not.
-	 * Optionally, provide a state where the error occurs (as an Object),
-	 * and/or a pointer to where the error occurs syntactically (as an ASTElement)
+	 * If {@code expectedRewards} is true, also convert any (Markov chain) transition rewards to
+	 * expected state rewards.
 	 * @param rewards The rewards
 	 * @param model The model for the rewards
 	 * @param eval Evaluator matching the type {@code Value} of the reward value
+	 * @param expectedRewards Whether to convert (Markov chain) transition rewards to expected state rewards
+	 * @param allowNegative Whether negative rewards (i.e., weights) are allowed
 	 */
-	private <Value> void checkRewardObject(Rewards<Value> rewards, Model<Value> model, Evaluator<Value> eval) throws PrismException
+	private static <Value> Rewards<Value> checkRewardObject(Rewards<Value> rewards, Model<Value> model, Evaluator<Value> eval, boolean expectedRewards, boolean allowNegative) throws PrismException
 	{
 		int numStates = model.getNumStates();
+		// In some cases, we need to create a new Rewards object
+		// in which (Markov chain) transition rewards are converted to expected rewards
+		RewardsExplicit<Value> rewardsRet = null;
+		boolean convertToExpected = !model.getModelType().nondeterministic() && rewards.hasTransitionRewards() && expectedRewards;
+		if (convertToExpected) {
+			rewardsRet = new RewardsSimple<>(numStates);
+			rewardsRet.setEvaluator(rewards.getEvaluator());
+		}
 		// State rewards
 		for (int s = 0; s < numStates; s++) {
-			checkStateReward(rewards.getStateReward(s), eval, s, null);
+			Value rew = rewards.getStateReward(s);
+			checkStateReward(rew, eval, s, null, allowNegative);
+			if (convertToExpected) {
+				rewardsRet.setStateReward(s, rew);
+			}
 		}
 		// Transition rewards (nondet models)
 		if (model.getModelType().nondeterministic()) {
 			for (int s = 0; s < numStates; s++) {
 				int numChoices = ((NondetModel<?>) model).getNumChoices(s);
 				for (int i = 0; i < numChoices; i++) {
-					checkTransitionReward(rewards.getTransitionReward(s, i), eval, s, null);
+					checkTransitionReward(rewards.getTransitionReward(s, i), eval, s, null, allowNegative);
 				}
 			}
 		}
 		// Transition rewards (Markov chain like models)
 		else {
 			for (int s = 0; s < numStates; s++) {
-				int numTrans = model.getNumTransitions(s);
-				for (int i = 0; i < numTrans; i++) {
-					checkTransitionReward(rewards.getTransitionReward(s, i), eval, s, null);
+				if (!convertToExpected) {
+					int numTrans = model.getNumTransitions(s);
+					for (int i = 0; i < numTrans; i++) {
+						checkTransitionReward(rewards.getTransitionReward(s, i), eval, s, null, allowNegative);
+					}
+				} else {
+					DTMC<Value> mcModel = (DTMC<Value>) model;
+					Iterator<Map.Entry<Integer, Value>> iter = mcModel.getTransitionsIterator(s);
+					int i = 0;
+					while (iter.hasNext()) {
+						Map.Entry<Integer, Value> e = iter.next();
+						Value rew = rewards.getTransitionReward(s, i);
+						checkTransitionReward(rew, eval, s, null, allowNegative);
+						if (rewards.getEvaluator().isZero(rew)) {
+							i++;
+							continue;
+						}
+						Value rewWeighted = rewards.getEvaluator().multiply(e.getValue(), rew);
+						rewardsRet.addToStateReward(s, rewWeighted);
+						i++;
+					}
 				}
 			}
 		}
+		return convertToExpected ? rewardsRet : rewards;
 	}
 
 	/**
