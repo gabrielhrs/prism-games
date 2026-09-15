@@ -54,6 +54,7 @@ import parser.ast.ExpressionQuant;
 import parser.ast.ExpressionReward;
 import parser.ast.ExpressionSS;
 import parser.ast.ExpressionStrategy;
+import parser.ast.ExpressionStrategyQual;
 import parser.ast.ExpressionTemporal;
 import parser.ast.ExpressionUnaryOp;
 import parser.type.TypeBool;
@@ -622,10 +623,6 @@ public class ProbModelChecker extends NonProbModelChecker
 	 */
 	protected StateValues checkExpressionStrategy(Model<?> model, ExpressionStrategy expr, BitSet statesOfInterest) throws PrismException
 	{
-		// Only support <<>> right now, not [[]]
-		if (!expr.isThereExists())
-			throw new PrismNotSupportedException("The " + expr.getOperatorString() + " operator is not yet supported");
-
 		// Only support <<>> for MDPs/SMGs right now
 		if (!(this instanceof MDPModelChecker || this instanceof SMGModelChecker || this instanceof CSGModelChecker))
 			throw new PrismNotSupportedException("The " + expr.getOperatorString() + " operator is only supported for MDPs and SMGs currently");
@@ -656,6 +653,14 @@ public class ProbModelChecker extends NonProbModelChecker
 		}
 
 		Expression exprSub = exprs.get(0);
+
+		// [[]] (forAll) is only supported for the qualitative (sure/almost/limit) operator so
+		// far -- see checkExpressionStrategyQual and the CSGModelChecker override. Everything
+		// else below is unchanged <<>>-only rPATL machinery, kept exactly as before.
+		if (forAll && !(exprSub instanceof ExpressionStrategyQual)) {
+			throw new PrismNotSupportedException("The " + expr.getOperatorString() + " operator is not yet supported");
+		}
+
 		// Pass onto relevant method:
 		// P operator
 		if (exprSub instanceof ExpressionProb) {
@@ -673,10 +678,30 @@ public class ProbModelChecker extends NonProbModelChecker
 		else if (exprSub instanceof ExpressionMultiNash) {
 			return checkExpressionMultiNash(model, (ExpressionMultiNash) exprSub, expr.getCoalitions(), expr.getEquilibriumType(), expr.getEquilibriumCriterion());
 		}
+		// Qualitative (sure/almost/limit) strategy operator
+		else if (exprSub instanceof ExpressionStrategyQual) {
+			return checkExpressionStrategyQual(model, (ExpressionStrategyQual) exprSub, forAll, coalition, statesOfInterest);
+		}
 		// Anything else is treated as multi-objective
 		else {
 			return checkExpressionMultiObjective(model, expr, forAll, coalition);
 		}
+	}
+
+	/**
+	 * Compute the (Boolean) result of a qualitative (sure/almost/limit) strategy operator,
+	 * e.g. sure/almost/limit [ G phi ], [ F phi ], [ G F phi ] or [ F G phi ], for a single
+	 * coalition against its complement (strictly zero-sum, no equilibrium options).
+	 * To be overridden by subclasses (currently: CSGModelChecker).
+	 *
+	 * @param forAll Quantify "for all strategies" of the coalition ({@code [[C]]}, true)
+	 *               rather than "there exists a strategy" ({@code <<C>>}, false). The
+	 *               coalition itself is unchanged either way -- only which side of the
+	 *               zero-sum game it plays flips. See the CSGModelChecker override.
+	 */
+	protected StateValues checkExpressionStrategyQual(Model<?> model, ExpressionStrategyQual expr, boolean forAll, Coalition coalition, BitSet statesOfInterest) throws PrismException
+	{
+		throw new PrismNotSupportedException("The " + expr.getMode() + " operator is not yet supported for " + model.getModelType() + "s");
 	}
 
 	protected StateValues checkExpressionMultiNash(Model<?> model, ExpressionMultiNash expr, List<Coalition> coalitions, ExpressionStrategy.EquilibriumType equilibriumType, ExpressionStrategy.EquilibriumCriterion equilibriumCriterion) throws PrismException

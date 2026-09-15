@@ -157,105 +157,111 @@ public interface PrismParserConstants {
   /** RegularExpression Id. */
   int R = 73;
   /** RegularExpression Id. */
-  int S = 74;
+  int ALMOST = 74;
   /** RegularExpression Id. */
-  int STOCHASTIC = 75;
+  int LIMIT = 75;
   /** RegularExpression Id. */
-  int STPG = 76;
+  int SURE = 76;
   /** RegularExpression Id. */
-  int SMG = 77;
+  int S = 77;
   /** RegularExpression Id. */
-  int SYSTEM = 78;
+  int STOCHASTIC = 78;
   /** RegularExpression Id. */
-  int TPTG = 79;
+  int STPG = 79;
   /** RegularExpression Id. */
-  int TRUE = 80;
+  int SMG = 80;
   /** RegularExpression Id. */
-  int U = 81;
+  int SYSTEM = 81;
   /** RegularExpression Id. */
-  int W = 82;
+  int TPTG = 82;
   /** RegularExpression Id. */
-  int NOT = 83;
+  int TRUE = 83;
   /** RegularExpression Id. */
-  int AND = 84;
+  int U = 84;
   /** RegularExpression Id. */
-  int OR = 85;
+  int W = 85;
   /** RegularExpression Id. */
-  int IMPLIES = 86;
+  int NOT = 86;
   /** RegularExpression Id. */
-  int IFF = 87;
+  int AND = 87;
   /** RegularExpression Id. */
-  int RARROW = 88;
+  int OR = 88;
   /** RegularExpression Id. */
-  int COLON = 89;
+  int IMPLIES = 89;
   /** RegularExpression Id. */
-  int SEMICOLON = 90;
+  int IFF = 90;
   /** RegularExpression Id. */
-  int COMMA = 91;
+  int RARROW = 91;
   /** RegularExpression Id. */
-  int DOTS = 92;
+  int COLON = 92;
   /** RegularExpression Id. */
-  int LPARENTH = 93;
+  int SEMICOLON = 93;
   /** RegularExpression Id. */
-  int RPARENTH = 94;
+  int COMMA = 94;
   /** RegularExpression Id. */
-  int LBRACKET = 95;
+  int DOTS = 95;
   /** RegularExpression Id. */
-  int RBRACKET = 96;
+  int LPARENTH = 96;
   /** RegularExpression Id. */
-  int DLBRACKET = 97;
+  int RPARENTH = 97;
   /** RegularExpression Id. */
-  int DRBRACKET = 98;
+  int LBRACKET = 98;
   /** RegularExpression Id. */
-  int LBRACE = 99;
+  int RBRACKET = 99;
   /** RegularExpression Id. */
-  int RBRACE = 100;
+  int DLBRACKET = 100;
   /** RegularExpression Id. */
-  int EQ = 101;
+  int DRBRACKET = 101;
   /** RegularExpression Id. */
-  int NE = 102;
+  int LBRACE = 102;
   /** RegularExpression Id. */
-  int LT = 103;
+  int RBRACE = 103;
   /** RegularExpression Id. */
-  int GT = 104;
+  int EQ = 104;
   /** RegularExpression Id. */
-  int DLT = 105;
+  int NE = 105;
   /** RegularExpression Id. */
-  int DGT = 106;
+  int LT = 106;
   /** RegularExpression Id. */
-  int LE = 107;
+  int GT = 107;
   /** RegularExpression Id. */
-  int GE = 108;
+  int DLT = 108;
   /** RegularExpression Id. */
-  int PLUS = 109;
+  int DGT = 109;
   /** RegularExpression Id. */
-  int MINUS = 110;
+  int LE = 110;
   /** RegularExpression Id. */
-  int TIMES = 111;
+  int GE = 111;
   /** RegularExpression Id. */
-  int DIVIDE = 112;
+  int PLUS = 112;
   /** RegularExpression Id. */
-  int POWER = 113;
+  int MINUS = 113;
   /** RegularExpression Id. */
-  int PRIME = 114;
+  int TIMES = 114;
   /** RegularExpression Id. */
-  int RENAME = 115;
+  int DIVIDE = 115;
   /** RegularExpression Id. */
-  int QMARK = 116;
+  int POWER = 116;
   /** RegularExpression Id. */
-  int DQUOTE = 117;
+  int PRIME = 117;
   /** RegularExpression Id. */
-  int REG_INT = 118;
+  int RENAME = 118;
   /** RegularExpression Id. */
-  int REG_DOUBLE = 119;
+  int QMARK = 119;
   /** RegularExpression Id. */
-  int REG_IDENTPRIME = 120;
+  int DQUOTE = 120;
   /** RegularExpression Id. */
-  int REG_IDENT = 121;
+  int REG_INT = 121;
   /** RegularExpression Id. */
-  int PREPROC = 122;
+  int REG_DOUBLE = 122;
   /** RegularExpression Id. */
-  int LEXICAL_ERROR = 123;
+  int REG_IDENTPRIME = 123;
+  /** RegularExpression Id. */
+  int REG_IDENT = 124;
+  /** RegularExpression Id. */
+  int PREPROC = 125;
+  /** RegularExpression Id. */
+  int LEXICAL_ERROR = 126;
 
   /** Lexical state. */
   int DEFAULT = 0;
@@ -336,6 +342,9 @@ public interface PrismParserConstants {
     "\"Rminmin\"",
     "\"Rmin\"",
     "\"R\"",
+    "\"almost\"",
+    "\"limit\"",
+    "\"sure\"",
     "\"S\"",
     "\"stochastic\"",
     "\"stpg\"",
